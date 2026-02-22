@@ -9,11 +9,11 @@ dotenv.config()
 const supaRouter = require('../routes/supaRouter')
 const authRoutes = require('../routes/authRoutes')
 const { supabase } = require('../config/supabase')
-const checkSupabaseConnection = require('../utils/supaBaseConnection')
+const { startupCheck } = require('../controllers/supabaseController')
 const healthRouter = require('../routes/healthRouter')
 
 
-checkSupabaseConnection()
+startupCheck()
 
 
 const app = express()
