@@ -1,28 +1,37 @@
-const OLLAMA_BASE_URL = 'http://localhost:11434'
+const path = require('path')
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') })
+const { generateEmbedding, resolveQuery } = require('./vectorUtils')
 
-const generateEmbedding = async (text) => {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            model: 'nomic-embed-text',
-            prompt: text,
-        }),
-    })
-
-    if (!response.ok) {
-        throw new Error('Failed to generate embedding')
+const testEmbedding = async () => {
+    console.log('--- Testing Embedding Generation ---')
+    try {
+        const embedding = await generateEmbedding('Hello AssistIQ')
+        console.log('Embedding generated successfully')
+        console.log('Dimensions:', embedding.length)
+    } catch (err) {
+        console.error('Embedding failed:', err.message)
     }
-
-    const data = await response.json()
-    if (!data.embedding || data.embedding.length !== 768) {
-        throw new Error(`Unexpected dimensions: got ${data.embedding?.length}, expected 768`)
-    }
-    return data.embedding
 }
-const soln = generateEmbedding("Hello world")
-soln.then((res) => {
-    console.log(res)
-}).catch((err) => {
-    console.log(err)
-})
+
+const testQueryResolution = async () => {
+    console.log('\n--- Testing Query Resolution ---')
+    try {
+        const query = "What is the return policy?"
+        const context = "Customers can return any item within 30 days of purchase for a full refund."
+        console.log('Query:', query)
+        console.log('Context:', context)
+
+        const response = await resolveQuery(query, context)
+        console.log('\nResponse received:')
+        console.log(response)
+    } catch (err) {
+        console.error('Query resolution failed:', err.message)
+    }
+}
+
+const runTests = async () => {
+    await testEmbedding()
+    await testQueryResolution()
+}
+
+runTests()

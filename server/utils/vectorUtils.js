@@ -1,3 +1,5 @@
+const { supabase } = require('../config/supabase')
+
 const OLLAMA_BASE_URL = 'http://localhost:11434'
 
 const prompt = (content) => {
@@ -5,8 +7,8 @@ const prompt = (content) => {
 Role: Consider yourself as a top notch Customer Support Assistant who specializes in resolving
 customer queries with maximum efficiency and best result
 Task: Take the context of ${content} and respond to the user query in a concise and professional manner
-If the user is confused guide the user thoroughly to make sure his issue is resolved
-If the user is not satisfied with the response, guide the user to resolve the issue
+Do not give un necessary instructions if specifically not asked for by the user. Guide only if the user 
+asks to with a series of options or steps. If not prompted directly , dont give it in the response.
 Notes: Only refer to the context provided and do not search for any other information
 Any infomation scavenging on the internet is strictly prohibited, You can only refer to the context provided
 provided to get a efficient solution to user's query
@@ -28,6 +30,8 @@ const generateEmbedding = async (text) => {
     }
 
     const data = await response.json()
+    const embedding = data.embedding
+
     if (!embedding || embedding.length !== 768) {
         throw new Error(`Unexpected dimensions: got ${embedding?.length}, expected 768`)
     }
@@ -40,7 +44,7 @@ const searchByEmbedding = async (queryEmbedding, topK = 5) => {
         top_k: topK
     })
     if (error) {
-        throw new Error("Error searching knowledge base");
+        throw new Error("Error searching knowledge base: " + error.message);
     }
     return data;
 }
@@ -48,7 +52,7 @@ const searchByEmbedding = async (queryEmbedding, topK = 5) => {
 
 const resolveQuery = async (query, content) => {
     const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
-        method: 'GET',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             model: 'mistral',
@@ -67,12 +71,12 @@ const resolveQuery = async (query, content) => {
     })
 
     if (!response.ok) {
-        const error = await response.text()
-        throw new Error('Failed to generate response', error)
+        const errorText = await response.text()
+        throw new Error(`Failed to generate response: ${errorText}`)
     }
 
     const data = await response.json()
-    return data
+    return data.message?.content || data
 }
 
 module.exports = { generateEmbedding, searchByEmbedding, resolveQuery }

@@ -1,6 +1,6 @@
 const { supabase } = require('../config/supabase')
 
-// Core logic to verify connection and schema
+
 const verifySchema = async () => {
     const tables = ['profiles', 'chat_sessions', 'messages', 'knowledge_base']
     const results = {}
@@ -12,14 +12,13 @@ const verifySchema = async () => {
             results[table] = `Error: ${error.message}`
             allOk = false
         } else {
-            results[table] = '✅ Accessible'
+            results[table] = 'Accessible'
         }
     }
 
     return { allOk, results }
 }
 
-// Request handler for supaRouter
 const testConnection = async (req, res) => {
     try {
         const { allOk, results } = await verifySchema()
@@ -34,17 +33,16 @@ const testConnection = async (req, res) => {
     }
 }
 
-// Logic for server startup check
 const startupCheck = async () => {
     try {
         const { allOk } = await verifySchema()
         if (allOk) {
-            console.log('✅ Supabase Connection: Successful')
+            console.log('Supabase Connection: Successful')
         } else {
-            console.warn('⚠️ Supabase Connection: Partial Success (Check tables)')
+            console.warn('Supabase Connection: Partial Success (Check tables)')
         }
     } catch (err) {
-        console.error('❌ Supabase Connection Error:', err.message)
+        console.error('Supabase Connection Error:', err.message)
     }
 }
 
