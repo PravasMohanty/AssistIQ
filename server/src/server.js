@@ -7,7 +7,7 @@ const { Server } = require('socket.io')
 dotenv.config()
 
 const supaRouter = require('../routes/supaRouter')
-const authRoutes = require('../routes/authRoutes')
+const authRoutes = require('../routes/authRouter')
 const kbRouter = require('../routes/kbRouter')
 const { supabase } = require('../config/supabase')
 const { startupCheck } = require('../controllers/supabaseController')

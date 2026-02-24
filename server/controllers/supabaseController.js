@@ -35,11 +35,12 @@ const testConnection = async (req, res) => {
 
 const startupCheck = async () => {
     try {
-        const { allOk } = await verifySchema()
+        const { allOk, results } = await verifySchema()
         if (allOk) {
             console.log('Supabase Connection: Successful')
         } else {
             console.warn('Supabase Connection: Partial Success (Check tables)')
+            console.log('Table results:', results) // ← add this
         }
     } catch (err) {
         console.error('Supabase Connection Error:', err.message)
