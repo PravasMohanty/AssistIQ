@@ -7,7 +7,7 @@ const getMessages = async (req, res) => {
         if (!id) {
             return res.status(400).json({ status: 'error', error: 'Chat ID is required' })
         }
-        const { data, error } = await supabase.from('messages').select('*').eq('chat_id', id).order('created_at', { ascending: true })
+        const { data, error } = await supabase.from('messages').select('*').eq('session_id', id).order('created_at', { ascending: true })
         if (error) throw error
         res.json({ status: 'success', data })
     } catch (err) {
@@ -30,7 +30,7 @@ const sendMessage = async (req, res) => {
             return res.status(400).json({ status: 'error', error: 'A non-empty message string is required' })
         }
 
-        const { error: userMsgError } = await supabase.from('messages').insert({ chat_id: id, role: 'user', content: message })
+        const { error: userMsgError } = await supabase.from('messages').insert({ session_id: id, sender_role: 'customer', content: message })
         if (userMsgError) throw userMsgError
 
         const context = await _searchKb(message)
@@ -39,7 +39,7 @@ const sendMessage = async (req, res) => {
 
         const aiResponse = await _resolveKb(message, contextString)
 
-        const { error: aiMsgError } = await supabase.from('messages').insert({ chat_id: id, role: 'assistant', content: aiResponse })
+        const { error: aiMsgError } = await supabase.from('messages').insert({ session_id: id, sender_role: 'ai', content: aiResponse })
         if (aiMsgError) throw aiMsgError
 
         res.json({ status: 'success', response: aiResponse })

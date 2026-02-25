@@ -50,11 +50,25 @@ const login = async (req, res) => {
 
 // Profile
 const getProfile = async (req, res) => {
-    res.json({ user: req.user })
+    const user = req.user
+    return res.json({
+        id: user.id,  // Also include ID - frontend might need it
+        name: user.user_metadata?.name || '',
+        email: user.email,
+        role: user.app_metadata?.role || 'customer'
+    })
 }
 
 const logout = async (req, res) => {
-    res.json({ message: "Remove token from client storage" })
+    try {
+        const token = req.headers.authorization.split(' ')[1]
+        const { error } = await supabase.auth.signOut(token)
+
+        if (error) return res.status(401).json({ error: error.message })
+        return res.json({ message: "Logout successful" })
+    } catch (error) {
+        res.status(500).json({ error: "Logout failed" })
+    }
 }
 
 module.exports = { register, login, getProfile, logout }
