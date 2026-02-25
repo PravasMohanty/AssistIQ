@@ -1,10 +1,12 @@
 const express = require('express')
 const sessionRouter = express.Router()
+const { createSession, getCurrentSession, resolveSession } = require('../controllers/sessionController')
+const authMiddleware = require('../middleware/authMiddleware')
 
-const { createSession, getCurentSession, resolveSession } = require('../controllers/sessionController')
+sessionRouter.use(authMiddleware)
 
 sessionRouter.post('/create', createSession)
-sessionRouter.get('/current', getCurentSession)
+sessionRouter.get('/current', getCurrentSession)
 sessionRouter.post('/resolve', resolveSession)
 
 module.exports = sessionRouter

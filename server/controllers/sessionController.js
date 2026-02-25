@@ -1,3 +1,5 @@
+const { supabase } = require('../config/supabase')
+
 const createSession = async (req, res) => {
     try {
         const user_id = req.user.id
