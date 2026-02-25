@@ -76,7 +76,12 @@ const resolveQuery = async (query, content) => {
     }
 
     const data = await response.json()
-    return data.message?.content || data
+    const reply = data.message?.content
+    if (!reply) {
+        console.warn('[resolveQuery] Unexpected LLM response shape:', JSON.stringify(data))
+        return 'Sorry, I was unable to generate a response. Please try again.'
+    }
+    return reply
 }
 
 module.exports = { generateEmbedding, searchByEmbedding, resolveQuery }

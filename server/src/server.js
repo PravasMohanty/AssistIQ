@@ -9,9 +9,11 @@ dotenv.config()
 const supaRouter = require('../routes/supaRouter')
 const authRoutes = require('../routes/authRouter')
 const kbRouter = require('../routes/kbRouter')
+const chatRouter = require('../routes/chatRouter')
 const { supabase } = require('../config/supabase')
 const { startupCheck } = require('../controllers/supabaseController')
 const healthRouter = require('../routes/healthRouter')
+const testRouter = require('../routes/testRouter')
 
 
 startupCheck()
@@ -20,12 +22,14 @@ startupCheck()
 const app = express()
 app.use(cors())
 app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+app.use(express.urlencoded())
 
 app.use('/api', supaRouter)
 app.use('/api/health', healthRouter)
 app.use('/api/auth', authRoutes)
 app.use('/api/kb', kbRouter)
+app.use('/api/chat', chatRouter)
+app.use('/api/test', testRouter)
 
 const server = http.Server(app)
 const io = new Server(server, {
@@ -42,8 +46,8 @@ io.on('connection', (socket) => {
     })
 })
 
-const PORT = process.env.PORT
-server.listen(PORT || 5180, () => {
+const PORT = process.env.PORT || 5180
+server.listen(PORT, () => {
     console.log(` Server running at http://localhost:${PORT}`)
     console.log(` Health Check: http://localhost:${PORT}/api/health `)
 })

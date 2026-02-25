@@ -1,6 +1,6 @@
 const { supabase } = require('../config/supabase')
 
-const authMiddleware = async (req, res, next) => {
+const adminMiddleware = async (req, res, next) => {
     try {
         const authHeader = req.headers.authorization
 
@@ -16,11 +16,16 @@ const authMiddleware = async (req, res, next) => {
             return res.status(401).json({ status: 'error', error: 'Invalid or expired token' })
         }
 
+        if (user.app_metadata?.role !== 'admin') {
+            return res.status(403).json({ status: 'error', error: 'Admin access required' })
+        }
+
         req.user = user
         next()
-    } catch (err) {
-        return res.status(500).json({ status: 'error', error: 'Authentication failed' })
+    } catch (error) {
+        console.error('[adminMiddleware] Unexpected error:', error)
+        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
     }
 }
 
-module.exports = authMiddleware
+module.exports = adminMiddleware

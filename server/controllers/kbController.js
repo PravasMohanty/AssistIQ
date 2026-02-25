@@ -1,5 +1,4 @@
 const { supabase } = require('../config/supabase')
-const getTime = require('../utils/getTime')
 const { generateEmbedding, searchByEmbedding, resolveQuery } = require('../utils/vectorUtils')
 
 const VALID_TYPES = ['instruction', 'qa']
@@ -14,6 +13,10 @@ const addKbContent = async (req, res) => {
 
         if (!VALID_TYPES.includes(type)) {
             return res.status(400).json({ status: 'error', error: `type must be one of: ${VALID_TYPES.join(', ')}` })
+        }
+
+        if (metadata !== undefined && metadata !== null && (typeof metadata !== 'object' || Array.isArray(metadata))) {
+            return res.status(400).json({ status: 'error', error: 'metadata must be a JSON object if provided' })
         }
 
         const embedding = await generateEmbedding(`${title} ${content}`)

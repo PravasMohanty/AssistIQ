@@ -11,7 +11,8 @@ const getMessages = async (req, res) => {
         if (error) throw error
         res.json({ status: 'success', data })
     } catch (err) {
-        res.status(500).json({ status: 'error', error: err.message })
+        console.error('[getMessages] Error:', err)
+        res.status(500).json({ status: 'error', error: 'Failed to fetch messages' })
     }
 }
 
@@ -25,8 +26,8 @@ const sendMessage = async (req, res) => {
 
         const { message } = req.body
 
-        if (!message) {
-            return res.status(400).json({ status: 'error', error: 'Message is required' })
+        if (!message || typeof message !== 'string' || !message.trim()) {
+            return res.status(400).json({ status: 'error', error: 'A non-empty message string is required' })
         }
 
         const { error: userMsgError } = await supabase.from('messages').insert({ chat_id: id, role: 'user', content: message })
@@ -43,7 +44,8 @@ const sendMessage = async (req, res) => {
 
         res.json({ status: 'success', response: aiResponse })
     } catch (err) {
-        res.status(500).json({ status: 'error', error: err.message })
+        console.error('[sendMessage] Error:', err)
+        res.status(500).json({ status: 'error', error: 'Failed to process message' })
     }
 }
 
