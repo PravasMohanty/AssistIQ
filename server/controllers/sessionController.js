@@ -4,15 +4,24 @@ const createSession = async (req, res) => {
     try {
         const user_id = req.user.id
 
+        // Auto-resolve existing active sessions for this user
+        const { error: resolveError } = await supabase
+            .from('chat_sessions')
+            .update({ status: 'resolved' })
+            .eq('user_id', user_id)
+            .eq('status', 'active')
+
+        if (resolveError) throw resolveError
+
         const { data, error } = await supabase
             .from('chat_sessions')
             .insert({
                 user_id,
-                title: 'New Chat', // Optional default title
+                title: 'New Chat',
                 status: 'active'
             })
             .select()
-            .single() // Return single object, not array
+            .single()
 
         if (error) throw error
 
