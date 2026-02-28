@@ -20,7 +20,7 @@ const setupSocket = (io) => {
             socket.user = {
                 id: user.id,
                 email: user.email,
-                role: user.app_metadata?.role || 'customer'
+                role: user.app_metadata?.role || 'user'
             }
             next()
         } catch (err) {
@@ -58,7 +58,7 @@ const setupSocket = (io) => {
                 // 1. Save user's message (FIX: use session_id and sender_role)
                 const { error: userMsgError } = await supabase
                     .from('messages')
-                    .insert({ session_id: chatId, sender_role: 'customer', content: trimmedMessage })
+                    .insert({ session_id: chatId, sender_role: 'user', content: trimmedMessage })
 
                 if (userMsgError) throw userMsgError
 

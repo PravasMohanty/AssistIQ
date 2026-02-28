@@ -73,7 +73,7 @@ const sendMessage = async (req, res) => {
             return res.status(400).json({ status: 'error', error: 'Cannot send messages to a resolved session' })
         }
 
-        const { error: userMsgError } = await supabase.from('messages').insert({ session_id: id, sender_role: 'customer', content: message })
+        const { error: userMsgError } = await supabase.from('messages').insert({ session_id: id, sender_role: 'user', content: message })
         if (userMsgError) throw userMsgError
 
         const context = await _searchKb(message)

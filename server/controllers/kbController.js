@@ -45,6 +45,103 @@ const addKbContent = async (req, res) => {
     }
 }
 
+const getAllKbEntries = async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('knowledge_base')
+            .select('id, title, content, type, metadata, created_at')
+            .order('created_at', { ascending: false })
+
+        if (error) {
+            console.error('[getAllKbEntries] Supabase error:', error)
+            return res.status(500).json({ status: 'error', error: 'Failed to fetch knowledge base entries' })
+        }
+
+        return res.status(200).json({ status: 'success', entries: data || [] })
+    } catch (error) {
+        console.error('[getAllKbEntries] Unexpected error:', error)
+        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+    }
+}
+
+const updateKbEntry = async (req, res) => {
+    try {
+        const { id } = req.params
+        const { title, content, type, metadata } = req.body
+
+        if (!id) {
+            return res.status(400).json({ status: 'error', error: 'Entry id is required' })
+        }
+
+        if (type && !VALID_TYPES.includes(type)) {
+            return res.status(400).json({ status: 'error', error: `type must be one of: ${VALID_TYPES.join(', ')}` })
+        }
+
+        // Build update payload
+        const updatePayload = {}
+        if (title !== undefined) updatePayload.title = title
+        if (content !== undefined) updatePayload.content = content
+        if (type !== undefined) updatePayload.type = type
+        if (metadata !== undefined) updatePayload.metadata = metadata
+
+        // Re-generate embedding if title or content changed
+        if (title || content) {
+            // Fetch current entry to combine with partial update
+            const { data: current } = await supabase
+                .from('knowledge_base')
+                .select('title, content')
+                .eq('id', id)
+                .single()
+
+            const newTitle = title || current?.title || ''
+            const newContent = content || current?.content || ''
+            updatePayload.embedding = await generateEmbedding(`${newTitle} ${newContent}`)
+        }
+
+        const { data, error } = await supabase
+            .from('knowledge_base')
+            .update(updatePayload)
+            .eq('id', id)
+            .select()
+            .single()
+
+        if (error) {
+            console.error('[updateKbEntry] Supabase error:', error)
+            return res.status(500).json({ status: 'error', error: 'Failed to update knowledge base entry' })
+        }
+
+        return res.status(200).json({ status: 'success', message: 'Knowledge base entry updated', data })
+    } catch (error) {
+        console.error('[updateKbEntry] Unexpected error:', error)
+        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+    }
+}
+
+const deleteKbEntry = async (req, res) => {
+    try {
+        const { id } = req.params
+
+        if (!id) {
+            return res.status(400).json({ status: 'error', error: 'Entry id is required' })
+        }
+
+        const { error } = await supabase
+            .from('knowledge_base')
+            .delete()
+            .eq('id', id)
+
+        if (error) {
+            console.error('[deleteKbEntry] Supabase error:', error)
+            return res.status(500).json({ status: 'error', error: 'Failed to delete knowledge base entry' })
+        }
+
+        return res.status(200).json({ status: 'success', message: 'Knowledge base entry deleted' })
+    } catch (error) {
+        console.error('[deleteKbEntry] Unexpected error:', error)
+        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+    }
+}
+
 // Internal: core search logic, callable without req/res
 const _searchKb = async (query) => {
     const queryEmbedding = await generateEmbedding(query.trim())
@@ -113,4 +210,4 @@ const resolveKbQuery = async (req, res) => {
     }
 }
 
-module.exports = { addKbContent, searchKbContent, resolveKbQuery, _searchKb, _resolveKb }
+module.exports = { addKbContent, getAllKbEntries, updateKbEntry, deleteKbEntry, searchKbContent, resolveKbQuery, _searchKb, _resolveKb }
