@@ -4,15 +4,24 @@ const createSession = async (req, res) => {
     try {
         const user_id = req.user.id
 
+        // Auto-resolve existing active sessions for this user
+        const { error: resolveError } = await supabase
+            .from('chat_sessions')
+            .update({ status: 'resolved' })
+            .eq('user_id', user_id)
+            .eq('status', 'active')
+
+        if (resolveError) throw resolveError
+
         const { data, error } = await supabase
             .from('chat_sessions')
             .insert({
                 user_id,
-                title: 'New Chat', // Optional default title
+                title: 'New Chat',
                 status: 'active'
             })
             .select()
-            .single() // Return single object, not array
+            .single()
 
         if (error) throw error
 
@@ -90,4 +99,20 @@ const resolveSession = async (req, res) => {
     }
 }
 
-module.exports = { createSession, getCurrentSession, resolveSession }
+const getAllSessions = async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('chat_sessions')
+            .select('id, user_id, title, status, created_at')
+            .order('created_at', { ascending: false })
+
+        if (error) throw error
+
+        return res.json({ status: 'success', sessions: data || [] })
+    } catch (error) {
+        console.error('[getAllSessions]', error)
+        return res.status(500).json({ error: 'Failed to fetch sessions' })
+    }
+}
+
+module.exports = { createSession, getCurrentSession, resolveSession, getAllSessions }

@@ -21,7 +21,10 @@ startupCheck()
 
 
 const app = express()
-app.use(cors())
+app.use(cors({
+    origin: 'http://localhost:5173', // Change this to 3000 if using Create React App
+    credentials: true
+}))
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
 

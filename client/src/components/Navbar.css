@@ -1,0 +1,123 @@
+/* ===== Navbar ===== */
+
+.navbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--nav-height);
+  padding: 0 24px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nav-logo {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-gradient);
+  border-radius: var(--radius-sm);
+  color: white;
+}
+
+.nav-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.nav-sparkle {
+  color: #fbbf24;
+  animation: navSparkle 2s ease-in-out infinite;
+}
+
+@keyframes navSparkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* Nav Links */
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  text-decoration: none;
+}
+
+.nav-link:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.nav-link.active {
+  color: var(--accent-primary-hover);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+/* Nav Right */
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.nav-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-user-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.nav-logout {
+  color: var(--text-tertiary);
+}
+
+.nav-logout:hover {
+  color: var(--error) !important;
+  background: var(--error-bg) !important;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .navbar {
+    padding: 0 16px;
+  }
+
+  .nav-user-name {
+    display: none;
+  }
+
+  .nav-title {
+    display: none;
+  }
+}
