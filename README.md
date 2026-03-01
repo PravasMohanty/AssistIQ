@@ -65,7 +65,7 @@ Four tables power the application:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/AssistIQ.git
+git clone https://github.com/PravasMohanty/AssistIQ.git
 cd AssistIQ
 ```
 
@@ -91,59 +91,308 @@ ollama pull nomic-embed-text   # Embedding model (~270MB)
 3. Create the required tables:
 
 ```sql
--- Enable pgvector
+
+-- ============================================================
+-- CLEANUP: Drop existing objects (if any)
+-- ============================================================
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP TRIGGER IF EXISTS on_profile_role_change ON public.profiles;
+DROP FUNCTION IF EXISTS public.handle_new_user() CASCADE;
+DROP FUNCTION IF EXISTS public.sync_role_to_metadata() CASCADE;
+DROP FUNCTION IF EXISTS match_documents(vector, int) CASCADE;
+DROP TABLE IF EXISTS public.messages CASCADE;
+DROP TABLE IF EXISTS public.chat_sessions CASCADE;
+DROP TABLE IF EXISTS public.knowledge_base CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+
+-- ============================================================
+-- EXTENSIONS
+-- ============================================================
+
+-- Enable pgvector for embeddings and similarity search
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- Profiles table
-CREATE TABLE profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  email TEXT,
+-- ============================================================
+-- TABLE: profiles
+-- ============================================================
+-- Stores user profile information linked to Supabase auth.users
+-- Automatically created when a new user signs up
+
+CREATE TABLE public.profiles (
+  id UUID REFERENCES auth.users ON DELETE CASCADE PRIMARY KEY,
   name TEXT,
-  role TEXT DEFAULT 'user',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  email TEXT UNIQUE NOT NULL,
+  role TEXT DEFAULT 'customer' CHECK (role IN ('customer', 'admin', 'support')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Chat sessions table
-CREATE TABLE chat_sessions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+-- Enable Row Level Security
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for profiles
+CREATE POLICY "Users can view their own profile"
+  ON public.profiles FOR SELECT
+  USING (auth.uid() = id);
+
+CREATE POLICY "Users can update their own profile"
+  ON public.profiles FOR UPDATE
+  USING (auth.uid() = id);
+
+-- ============================================================
+-- TABLE: chat_sessions
+-- ============================================================
+-- Stores chat conversation sessions
+
+CREATE TABLE public.chat_sessions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
   title TEXT DEFAULT 'New Chat',
-  status TEXT DEFAULT 'active',
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  status TEXT DEFAULT 'active' CHECK (status IN ('active', 'resolved', 'archived')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Messages table
-CREATE TABLE messages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id UUID REFERENCES chat_sessions(id) ON DELETE CASCADE,
-  sender_role TEXT NOT NULL,
+-- Enable Row Level Security
+ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for chat_sessions
+CREATE POLICY "Users can view their own sessions"
+  ON public.chat_sessions FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own sessions"
+  ON public.chat_sessions FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update their own sessions"
+  ON public.chat_sessions FOR UPDATE
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete their own sessions"
+  ON public.chat_sessions FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- Index for faster user queries
+CREATE INDEX idx_chat_sessions_user_id ON public.chat_sessions(user_id);
+CREATE INDEX idx_chat_sessions_status ON public.chat_sessions(status);
+
+-- ============================================================
+-- TABLE: messages
+-- ============================================================
+-- Stores individual messages within chat sessions
+
+CREATE TABLE public.messages (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  session_id UUID REFERENCES public.chat_sessions(id) ON DELETE CASCADE NOT NULL,
+  sender_role TEXT CHECK (sender_role IN ('user', 'ai')) NOT NULL,
   content TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Knowledge base table with vector embeddings
-CREATE TABLE knowledge_base (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+-- Enable Row Level Security
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for messages (users can only see messages from their sessions)
+CREATE POLICY "Users can view messages from their sessions"
+  ON public.messages FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.chat_sessions
+      WHERE chat_sessions.id = messages.session_id
+      AND chat_sessions.user_id = auth.uid()
+    )
+  );
+
+CREATE POLICY "Users can insert messages to their sessions"
+  ON public.messages FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM public.chat_sessions
+      WHERE chat_sessions.id = messages.session_id
+      AND chat_sessions.user_id = auth.uid()
+    )
+  );
+
+-- Indexes for faster queries
+CREATE INDEX idx_messages_session_id ON public.messages(session_id);
+CREATE INDEX idx_messages_created_at ON public.messages(created_at);
+
+-- ============================================================
+-- TABLE: knowledge_base
+-- ============================================================
+-- Stores knowledge base articles with vector embeddings for semantic search
+
+CREATE TABLE public.knowledge_base (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   title TEXT NOT NULL,
   content TEXT NOT NULL,
-  type TEXT DEFAULT 'qa',
-  metadata JSONB,
+  type TEXT DEFAULT 'qa' CHECK (type IN ('instruction', 'qa', 'faq', 'documentation')),
+  metadata JSONB DEFAULT '{}'::jsonb,
   embedding VECTOR(768),
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Vector similarity search function
-CREATE OR REPLACE FUNCTION search_knowledge_base(query_embedding VECTOR(768), top_k INT DEFAULT 5)
-RETURNS TABLE (id UUID, title TEXT, content TEXT, type TEXT, metadata JSONB, similarity FLOAT)
-LANGUAGE plpgsql AS $$
-BEGIN
-  RETURN QUERY
-  SELECT kb.id, kb.title, kb.content, kb.type, kb.metadata,
-         1 - (kb.embedding <=> query_embedding) AS similarity
-  FROM knowledge_base kb
+-- Enable Row Level Security
+ALTER TABLE public.knowledge_base ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies for knowledge_base (read-only for authenticated users)
+CREATE POLICY "Authenticated users can view knowledge base"
+  ON public.knowledge_base FOR SELECT
+  TO authenticated
+  USING (true);
+
+-- Index for fast vector similarity search
+CREATE INDEX knowledge_base_embedding_idx
+  ON public.knowledge_base
+  USING ivfflat (embedding vector_cosine_ops)
+  WITH (lists = 100);
+
+-- Index for text search
+CREATE INDEX idx_knowledge_base_title ON public.knowledge_base USING gin(to_tsvector('english', title));
+CREATE INDEX idx_knowledge_base_content ON public.knowledge_base USING gin(to_tsvector('english', content));
+
+-- ============================================================
+-- FUNCTION: match_documents
+-- ============================================================
+-- Performs semantic similarity search on knowledge base using vector embeddings
+
+CREATE OR REPLACE FUNCTION match_documents(
+  query_embedding VECTOR(768),
+  match_count INT DEFAULT 5,
+  filter_type TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+  id UUID,
+  title TEXT,
+  content TEXT,
+  type TEXT,
+  metadata JSONB,
+  similarity FLOAT
+)
+LANGUAGE SQL STABLE AS $$
+  SELECT
+    kb.id,
+    kb.title,
+    kb.content,
+    kb.type,
+    kb.metadata,
+    1 - (kb.embedding <=> query_embedding) AS similarity
+  FROM public.knowledge_base kb
+  WHERE 
+    CASE 
+      WHEN filter_type IS NOT NULL THEN kb.type = filter_type
+      ELSE true
+    END
   ORDER BY kb.embedding <=> query_embedding
-  LIMIT top_k;
+  LIMIT match_count;
+$$;
+
+-- ============================================================
+-- TRIGGER FUNCTION: handle_new_user
+-- ============================================================
+-- Automatically creates a profile when a new user signs up
+
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Insert profile with default role
+  INSERT INTO public.profiles (id, name, email, role)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'name', ''),
+    NEW.email,
+    'customer'
+  );
+  
+  -- Also sync role to auth.users metadata
+  UPDATE auth.users
+  SET raw_app_meta_data = 
+    COALESCE(raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('role', 'customer')
+  WHERE id = NEW.id;
+  
+  RETURN NEW;
 END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Create trigger for new user signup
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_new_user();
+
+-- ============================================================
+-- TRIGGER FUNCTION: sync_role_to_metadata
+-- ============================================================
+-- Syncs role changes from profiles table to auth.users metadata
+-- This ensures role is always available in the JWT token
+
+CREATE OR REPLACE FUNCTION public.sync_role_to_metadata()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE auth.users
+  SET raw_app_meta_data = 
+    COALESCE(raw_app_meta_data, '{}'::jsonb) || jsonb_build_object('role', NEW.role)
+  WHERE id = NEW.id;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Create trigger for role changes
+CREATE TRIGGER on_profile_role_change
+  AFTER INSERT OR UPDATE OF role ON public.profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION public.sync_role_to_metadata();
+
+-- ============================================================
+-- FUNCTION: update_updated_at_column
+-- ============================================================
+-- Updates the updated_at timestamp automatically
+
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = timezone('utc'::text, now());
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Add updated_at triggers
+CREATE TRIGGER update_chat_sessions_updated_at
+  BEFORE UPDATE ON public.chat_sessions
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_knowledge_base_updated_at
+  BEFORE UPDATE ON public.knowledge_base
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- DATA MIGRATION: Restore existing users
+-- ============================================================
+-- If there are existing auth.users without profiles, create them
+
+INSERT INTO public.profiles (id, name, email, role)
+SELECT 
+  id, 
+  COALESCE(raw_user_meta_data->>'name', ''),
+  email,
+  'customer'
+FROM auth.users
+WHERE id NOT IN (SELECT id FROM public.profiles)
+ON CONFLICT (id) DO NOTHING;
+
+-- Sync all existing users' roles to metadata
+UPDATE auth.users u
+SET raw_app_meta_data = 
+  COALESCE(raw_app_meta_data, '{}'::jsonb) || 
+  jsonb_build_object('role', COALESCE(p.role, 'customer'))
+FROM public.profiles p
+WHERE u.id = p.id
+  AND (raw_app_meta_data->>'role' IS NULL OR raw_app_meta_data->>'role' != p.role);
 $$;
 ```
 
@@ -156,7 +405,6 @@ PORT=5180
 SUPABASE_PROJECT_URL="https://YOUR_PROJECT.supabase.co"
 ANON_PUBLIC_KEY="your-anon-key"
 SECRET_SERVICE_ROLE_KEY="your-service-role-key"
-HUGGINGFACE_TOKEN="your-hf-token"   # Optional, for HuggingFace fallback
 ```
 
 **Client** (`client/.env`):
@@ -262,8 +510,8 @@ User Message
      │
      ▼
 ┌─────────────┐     ┌──────────────────┐     ┌───────────────┐
-│  Socket.IO   │────▶│  Knowledge Base   │────▶│   Mistral LLM  │
-│  or HTTP     │     │  Semantic Search  │     │  (via Ollama)   │
+│  Socket.IO  │────▶│  Knowledge Base  │ ──▶│   Mistral LLM │
+│  or HTTP    │     │  Semantic Search │     │  (via Ollama) │
 └─────────────┘     └──────────────────┘     └───────────────┘
                            │                         │
                     nomic-embed-text           Contextual AI
