@@ -5,7 +5,7 @@ import { getToken, supabase } from '../config/supabase'
 // Create axios instance with your backend URL
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5180/api',
-    timeout: 10000,
+    timeout: 30000, // 30s to accommodate embedding generation via Ollama
     headers: {
         'Content-Type': 'application/json'
     }
@@ -34,18 +34,20 @@ api.interceptors.request.use(
 )
 
 // Response interceptor - Handle errors
+// IMPORTANT: Do NOT auto-signout on 401 here. The AuthContext manages
+// session state. Auto-signout here causes instant logout after login
+// if the profile fetch encounters any timing issue.
 api.interceptors.response.use(
     (response) => {
         return response
     },
     async (error) => {
-        // Handle different error statuses
         if (error.response) {
             switch (error.response.status) {
                 case 401:
-                    // Token expired - sign out and redirect
-                    await supabase.auth.signOut()
-                    window.location.href = '/login'
+                    console.warn('API returned 401 - token may be expired:', error.response.data)
+                    // Let the calling code handle this (e.g. AuthContext)
+                    // Do NOT call supabase.auth.signOut() here
                     break
 
                 case 403:
@@ -64,10 +66,8 @@ api.interceptors.response.use(
                     console.error('API error:', error.response.data)
             }
         } else if (error.request) {
-            // Request made but no response
             console.error('No response from server')
         } else {
-            // Something else happened
             console.error('Request error:', error.message)
         }
 

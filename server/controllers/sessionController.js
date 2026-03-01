@@ -99,4 +99,20 @@ const resolveSession = async (req, res) => {
     }
 }
 
-module.exports = { createSession, getCurrentSession, resolveSession }
+const getAllSessions = async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('chat_sessions')
+            .select('id, user_id, title, status, created_at')
+            .order('created_at', { ascending: false })
+
+        if (error) throw error
+
+        return res.json({ status: 'success', sessions: data || [] })
+    } catch (error) {
+        console.error('[getAllSessions]', error)
+        return res.status(500).json({ error: 'Failed to fetch sessions' })
+    }
+}
+
+module.exports = { createSession, getCurrentSession, resolveSession, getAllSessions }

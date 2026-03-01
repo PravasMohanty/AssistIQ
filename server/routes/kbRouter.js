@@ -6,7 +6,8 @@ const {
     updateKbEntry,
     deleteKbEntry,
     searchKbContent,
-    resolveKbQuery
+    resolveKbQuery,
+    syncEmbeddings
 } = require('../controllers/kbController')
 const adminMiddleware = require('../middleware/adminMiddleware')
 
@@ -18,6 +19,9 @@ KBRouter.get('/entries', adminMiddleware, getAllKbEntries)
 KBRouter.post('/entry', adminMiddleware, addKbContent)
 KBRouter.put('/entry/:id', adminMiddleware, updateKbEntry)
 KBRouter.delete('/entry/:id', adminMiddleware, deleteKbEntry)
+
+// Admin-only: sync embeddings for all entries
+KBRouter.post('/sync', adminMiddleware, syncEmbeddings)
 
 // Public / auth-only: search and resolve
 KBRouter.post('/search', searchKbContent)

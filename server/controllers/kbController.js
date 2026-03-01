@@ -5,9 +5,11 @@ const VALID_TYPES = ['instruction', 'qa']
 
 const addKbContent = async (req, res) => {
     try {
+        console.log('[addKbContent] 📥 Request received')
         const { title, content, type, metadata } = req.body
 
         if (!title || !content || !type) {
+            console.log('[addKbContent] ❌ Validation failed: missing title/content/type')
             return res.status(400).json({ status: 'error', error: 'title, content and type are required' })
         }
 
@@ -19,8 +21,11 @@ const addKbContent = async (req, res) => {
             return res.status(400).json({ status: 'error', error: 'metadata must be a JSON object if provided' })
         }
 
+        console.log('[addKbContent] 🔄 Generating embedding via Ollama...')
         const embedding = await generateEmbedding(`${title} ${content}`)
+        console.log('[addKbContent] ✅ Embedding generated')
 
+        console.log('[addKbContent] 💾 Inserting into Supabase...')
         const { data, error } = await supabase
             .from('knowledge_base')
             .insert({
@@ -34,14 +39,15 @@ const addKbContent = async (req, res) => {
             .single()
 
         if (error) {
-            console.error('[addKbContent] Supabase insert error:', error)
+            console.error('[addKbContent] ❌ Supabase insert error:', error)
             return res.status(500).json({ status: 'error', error: 'Failed to insert knowledge base entry' })
         }
 
+        console.log('[addKbContent] ✅ Entry added successfully:', data?.id)
         return res.status(201).json({ status: 'success', message: 'Knowledge base entry added', data })
     } catch (error) {
-        console.error('[addKbContent] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+        console.error('[addKbContent] ❌ Unexpected error:', error.message || error)
+        return res.status(500).json({ status: 'error', error: error.message || 'Internal Server Error' })
     }
 }
 
@@ -210,4 +216,42 @@ const resolveKbQuery = async (req, res) => {
     }
 }
 
-module.exports = { addKbContent, getAllKbEntries, updateKbEntry, deleteKbEntry, searchKbContent, resolveKbQuery, _searchKb, _resolveKb }
+// Sync embeddings for all KB entries (re-generate embeddings, useful after model changes)
+const syncEmbeddings = async (req, res) => {
+    try {
+        const { data: entries, error: fetchError } = await supabase
+            .from('knowledge_base')
+            .select('id, title, content')
+
+        if (fetchError) {
+            console.error('[syncEmbeddings] Fetch error:', fetchError)
+            return res.status(500).json({ status: 'error', error: 'Failed to fetch entries' })
+        }
+
+        if (!entries || entries.length === 0) {
+            return res.status(200).json({ status: 'success', message: 'No entries to sync', synced: 0 })
+        }
+
+        let synced = 0
+        for (const entry of entries) {
+            try {
+                const embedding = await generateEmbedding(`${entry.title || ''} ${entry.content || ''}`)
+                const { error: updateError } = await supabase
+                    .from('knowledge_base')
+                    .update({ embedding })
+                    .eq('id', entry.id)
+
+                if (!updateError) synced++
+            } catch (err) {
+                console.error(`[syncEmbeddings] Failed for entry ${entry.id}:`, err.message)
+            }
+        }
+
+        return res.status(200).json({ status: 'success', message: `Synced ${synced} of ${entries.length} entries`, synced })
+    } catch (error) {
+        console.error('[syncEmbeddings] Unexpected error:', error)
+        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+    }
+}
+
+module.exports = { addKbContent, getAllKbEntries, updateKbEntry, deleteKbEntry, searchKbContent, resolveKbQuery, syncEmbeddings, _searchKb, _resolveKb }

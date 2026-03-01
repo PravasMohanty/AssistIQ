@@ -50,21 +50,31 @@ const login = async (req, res) => {
 
 // Profile
 const getProfile = async (req, res) => {
-    const user = req.user
-    return res.json({
-        id: user.id,  // Also include ID - frontend might need it
-        name: user.user_metadata?.name || '',
-        email: user.email,
-        role: user.app_metadata?.role || 'customer'
-    })
+    try {
+        // Your authMiddleware already verified the token and attached the user to req.user
+        const user = req.user
+
+        // Supabase stores custom roles inside app_metadata
+        const userRole = user.app_metadata?.role || 'user'
+
+        // Return the exact flat structure your frontend requires
+        return res.status(200).json({
+            id: user.id,
+            email: user.email,
+            name: user.user_metadata?.name || 'user',
+            role: userRole // <-- This is what unlocks the admin features in your UI
+        })
+    } catch (error) {
+        console.error('[getProfile] Unexpected error:', error)
+        return res.status(500).json({ status: 'error', error: 'Failed to fetch profile' })
+    }
 }
 
 const logout = async (req, res) => {
     try {
-        const token = req.headers.authorization.split(' ')[1]
-        const { error } = await supabase.auth.signOut(token)
-
-        if (error) return res.status(401).json({ error: error.message })
+        // Since we are using Supabase client on frontend, 
+        // server-side logout is mostly for cleaning up any server-side traces if any.
+        // We'll just return success to confirm the request reached here.
         return res.json({ message: "Logout successful" })
     } catch (error) {
         res.status(500).json({ error: "Logout failed" })

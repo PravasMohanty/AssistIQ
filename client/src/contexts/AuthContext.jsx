@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { supabase } from '../../config/supabase'
 import { authAPI } from '../../api/auth'
 import { connectSocket, disconnectSocket } from '../../socket/socket'
@@ -17,63 +17,98 @@ export const AuthProvider = ({ children }) => {
     const [loading, setLoading] = useState(true)
 
     // Fetch user profile from backend
-    const fetchProfile = async () => {
+    const fetchProfile = useCallback(async () => {
         try {
+            console.log('🔄 Fetching user profile...')
             const res = await authAPI.getProfile()
             const profileData = res.profile || res.data || res
+
+            if (!profileData || typeof profileData !== 'object') {
+                throw new Error('Invalid profile data received from server')
+            }
+
+            console.log('✅ Profile loaded:', {
+                email: profileData.email,
+                role: profileData.role,
+                isAdmin: profileData.role === 'admin'
+            })
+
             setProfile(profileData)
             return profileData
         } catch (err) {
-            console.error('Failed to fetch profile:', err)
+            console.error('❌ Profile fetch failed:', err.message)
             setProfile(null)
             return null
         }
-    }
+    }, [])
 
-    // Initialize auth state
+    // Initialize auth state using ONLY onAuthStateChange
+    // This avoids Navigator Lock contention that happens when
+    // getSession() and onAuthStateChange() compete for the same lock
     useEffect(() => {
         let mounted = true
 
-        const initAuth = async () => {
-            try {
-                const { data: { session } } = await supabase.auth.getSession()
-
-                if (session?.user && mounted) {
-                    setUser(session.user)
-                    await fetchProfile()
-                    try { await connectSocket() } catch (e) { console.error('Socket connect failed:', e) }
-                }
-            } catch (err) {
-                console.error('Auth init error:', err)
-            } finally {
-                setLoading(false)
-            }
-        }
-
-        initAuth()
-
-        // Listen for auth changes
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
             async (event, session) => {
                 if (!mounted) return
 
-                if (event === 'SIGNED_IN' && session?.user) {
-                    setUser(session.user)
-                    await fetchProfile()
-                    try { await connectSocket() } catch (e) { console.error('Socket connect failed:', e) }
+                console.log('🔄 Auth event:', event)
+
+                if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+                    if (session?.user) {
+                        console.log('✅ User session active:', session.user.email)
+                        setUser(session.user)
+
+                        // Use setTimeout to avoid calling Supabase APIs inside the callback
+                        // which could cause additional lock contention
+                        setTimeout(async () => {
+                            if (!mounted) return
+                            const profileData = await fetchProfile()
+
+                            if (profileData) {
+                                try {
+                                    console.log('🔌 Connecting socket...')
+                                    await connectSocket()
+                                    console.log('✅ Socket connected')
+                                } catch (e) {
+                                    console.warn('⚠️ Socket connection failed (non-critical):', e.message)
+                                }
+                            }
+
+                            if (mounted) setLoading(false)
+                        }, 0)
+                    } else {
+                        console.log('ℹ️ No active session')
+                        setLoading(false)
+                    }
                 } else if (event === 'SIGNED_OUT') {
+                    console.log('👋 User signed out')
                     setUser(null)
                     setProfile(null)
                     disconnectSocket()
+                    setLoading(false)
+                } else if (event === 'TOKEN_REFRESHED') {
+                    console.log('🔑 Token refreshed')
+                    // No need to refetch profile, just update user
+                    if (session?.user) setUser(session.user)
                 }
             }
         )
 
+        // Safety timeout in case onAuthStateChange never fires
+        const safetyTimer = setTimeout(() => {
+            if (mounted) {
+                console.warn('[AuthContext] Safety timeout - forcing loading to false')
+                setLoading(false)
+            }
+        }, 10000)
+
         return () => {
             mounted = false
+            clearTimeout(safetyTimer)
             subscription?.unsubscribe()
         }
-    }, [])
+    }, [fetchProfile])
 
     // Login
     const login = async (email, password) => {
@@ -89,10 +124,18 @@ export const AuthProvider = ({ children }) => {
 
     // Logout
     const logout = async () => {
-        await authAPI.logout()
-        setUser(null)
-        setProfile(null)
-        disconnectSocket()
+        try {
+            console.log('🔄 Logging out...')
+            setUser(null)
+            setProfile(null)
+            disconnectSocket()
+            await supabase.auth.signOut()
+            console.log('✅ Logged out')
+        } catch (err) {
+            console.error('Logout error:', err)
+        }
+        // No window.location.href — let React Router handle the redirect
+        // The SIGNED_OUT event will clear state, and ProtectedRoute will redirect
     }
 
     const isAdmin = profile?.role === 'admin'

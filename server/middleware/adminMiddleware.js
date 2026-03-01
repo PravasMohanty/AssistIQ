@@ -2,6 +2,7 @@ const { supabase } = require('../config/supabase')
 
 const adminMiddleware = async (req, res, next) => {
     try {
+        console.log(`[adminMiddleware] ${req.method} ${req.originalUrl} - checking admin access...`)
         const authHeader = req.headers.authorization
 
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -16,7 +17,16 @@ const adminMiddleware = async (req, res, next) => {
             return res.status(401).json({ status: 'error', error: 'Invalid or expired token' })
         }
 
-        if (user.app_metadata?.role !== 'admin') {
+        // Fetch role from profiles table
+        const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', user.id)
+            .single()
+
+        const role = profile?.role || user.app_metadata?.role
+
+        if (role !== 'admin') {
             return res.status(403).json({ status: 'error', error: 'Admin access required' })
         }
 
