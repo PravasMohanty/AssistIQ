@@ -1,40 +1,33 @@
-const { supabase } = require('../config/supabase')
-
-const adminMiddleware = async (req, res, next) => {
+const adminMiddleware = (req, res, next) => {
     try {
-        console.log(`[adminMiddleware] ${req.method} ${req.originalUrl} - checking admin access...`)
-        const authHeader = req.headers.authorization
+        console.log(
+            `[adminMiddleware] ${req.method} ${req.originalUrl} - checking admin access...`
+        )
 
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({ status: 'error', error: 'No token provided' })
+        // authMiddleware should run before this middleware
+        if (!req.user) {
+            return res.status(401).json({
+                status: 'error',
+                error: 'Authentication required'
+            })
         }
 
-        const token = authHeader.split(' ')[1]
-
-        const { data: { user }, error } = await supabase.auth.getUser(token)
-
-        if (error || !user) {
-            return res.status(401).json({ status: 'error', error: 'Invalid or expired token' })
+        if (req.user.role !== 'admin') {
+            return res.status(403).json({
+                status: 'error',
+                error: 'Admin access required'
+            })
         }
 
-        // Fetch role from profiles table
-        const { data: profile, error: profileError } = await supabase
-            .from('profiles')
-            .select('role')
-            .eq('id', user.id)
-            .single()
-
-        const role = profile?.role || user.app_metadata?.role
-
-        if (role !== 'admin') {
-            return res.status(403).json({ status: 'error', error: 'Admin access required' })
-        }
-
-        req.user = user
         next()
+
     } catch (error) {
         console.error('[adminMiddleware] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+
+        return res.status(500).json({
+            status: 'error',
+            error: 'Internal Server Error'
+        })
     }
 }
 

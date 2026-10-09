@@ -1,36 +1,57 @@
-const { supabase } = require('../config/supabase')
+const jwt = require('jsonwebtoken')
 
-const authMiddleware = async (req, res, next) => {
+const JWT_SECRET = process.env.JWT_SECRET
+
+if (!JWT_SECRET) {
+    throw new Error('Missing JWT_SECRET in environment variables')
+}
+
+
+const authMiddleware = (req, res, next) => {
     try {
         const authHeader = req.headers.authorization
 
         if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({ status: 'error', error: 'No token provided' })
+            return res.status(401).json({
+                status: 'error',
+                error: 'No token provided'
+            })
         }
 
         const token = authHeader.split(' ')[1]
 
-        const { data: { user }, error } = await supabase.auth.getUser(token)
+        const decoded = jwt.verify(token, JWT_SECRET)
 
-        if (error) {
-            console.error('[authMiddleware] Token validation failed:', error.message)
-        }
+        req.user = decoded
 
-        if (error || !user) {
-            // Temporarily passing error.message to Postman so you can read it easily
+        next()
+
+    } catch (err) {
+        console.error(
+            '[authMiddleware] Token validation failed:',
+            err.message
+        )
+
+        if (err.name === 'TokenExpiredError') {
             return res.status(401).json({
                 status: 'error',
-                error: 'Invalid or expired token',
-                details: error?.message || 'User not found'
+                error: 'Token expired'
             })
         }
 
-        req.user = user
-        next()
-    } catch (err) {
-        console.error("-> Middleware crash:", err)
-        return res.status(500).json({ status: 'error', error: 'Authentication failed' })
+        if (err.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                status: 'error',
+                error: 'Invalid token'
+            })
+        }
+
+        return res.status(401).json({
+            status: 'error',
+            error: 'Authentication failed'
+        })
     }
 }
+
 
 module.exports = authMiddleware

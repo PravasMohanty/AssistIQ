@@ -1,5 +1,6 @@
-const { supabase } = require('../config/supabase')
-const { _searchKb, _resolveKb } = require('./kbController')
+const { pool } = require('../config/db')
+const { queryRAG } = require('../utils/ragClient')
+
 
 const getMessages = async (req, res) => {
     try {
@@ -7,37 +8,64 @@ const getMessages = async (req, res) => {
         const user_id = req.user.id
 
         if (!id) {
-            return res.status(400).json({ status: 'error', error: 'Chat ID is required' })
+            return res.status(400).json({
+                status: 'error',
+                error: 'Chat ID is required'
+            })
         }
 
-        // SECURITY: Verify session ownership
-        const { data: session, error: sessionError } = await supabase
-            .from('chat_sessions')
-            .select('user_id')
-            .eq('id', id)
-            .single()
+        // Verify session ownership
+        const sessionResult = await pool.query(
+            `
+            SELECT user_id
+            FROM chat_sessions
+            WHERE id = $1
+            `,
+            [id]
+        )
 
-        if (sessionError || !session) {
-            return res.status(404).json({ status: 'error', error: 'Session not found' })
+        if (sessionResult.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                error: 'Session not found'
+            })
         }
+
+        const session = sessionResult.rows[0]
 
         if (session.user_id !== user_id) {
-            return res.status(403).json({ status: 'error', error: 'Unauthorized access to this session' })
+            return res.status(403).json({
+                status: 'error',
+                error: 'Unauthorized access to this session'
+            })
         }
 
-        const { data, error } = await supabase
-            .from('messages')
-            .select('*')
-            .eq('session_id', id)
-            .order('created_at', { ascending: true })
+        // Fetch messages
+        const messagesResult = await pool.query(
+            `
+            SELECT *
+            FROM messages
+            WHERE session_id = $1
+            ORDER BY created_at ASC
+            `,
+            [id]
+        )
 
-        if (error) throw error
-        res.json({ status: 'success', data })
+        res.json({
+            status: 'success',
+            data: messagesResult.rows
+        })
+
     } catch (err) {
         console.error('[getMessages] Error:', err)
-        res.status(500).json({ status: 'error', error: 'Failed to fetch messages' })
+
+        res.status(500).json({
+            status: 'error',
+            error: 'Failed to fetch messages'
+        })
     }
 }
+
 
 const sendMessage = async (req, res) => {
     try {
@@ -45,50 +73,102 @@ const sendMessage = async (req, res) => {
         const user_id = req.user.id
 
         if (!id) {
-            return res.status(400).json({ status: 'error', error: 'Chat ID is required' })
+            return res.status(400).json({
+                status: 'error',
+                error: 'Chat ID is required'
+            })
         }
 
         const { message } = req.body
 
-        if (!message || typeof message !== 'string' || !message.trim()) {
-            return res.status(400).json({ status: 'error', error: 'A non-empty message string is required' })
+        if (
+            !message ||
+            typeof message !== 'string' ||
+            !message.trim()
+        ) {
+            return res.status(400).json({
+                status: 'error',
+                error: 'A non-empty message string is required'
+            })
         }
 
-        // SECURITY & CONSISTENCY: Verify ownership AND active status
-        const { data: session, error: sessionError } = await supabase
-            .from('chat_sessions')
-            .select('user_id, status')
-            .eq('id', id)
-            .single()
+        // Verify session ownership and status
+        const sessionResult = await pool.query(
+            `
+            SELECT user_id, status
+            FROM chat_sessions
+            WHERE id = $1
+            `,
+            [id]
+        )
 
-        if (sessionError || !session) {
-            return res.status(404).json({ status: 'error', error: 'Session not found' })
+        if (sessionResult.rows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                error: 'Session not found'
+            })
         }
+
+        const session = sessionResult.rows[0]
 
         if (session.user_id !== user_id) {
-            return res.status(403).json({ status: 'error', error: 'Unauthorized access to this session' })
+            return res.status(403).json({
+                status: 'error',
+                error: 'Unauthorized access to this session'
+            })
         }
 
         if (session.status !== 'active') {
-            return res.status(400).json({ status: 'error', error: 'Cannot send messages to a resolved session' })
+            return res.status(400).json({
+                status: 'error',
+                error: 'Cannot send messages to a resolved session'
+            })
         }
 
-        const { error: userMsgError } = await supabase.from('messages').insert({ session_id: id, sender_role: 'user', content: message })
-        if (userMsgError) throw userMsgError
+        // Store user's message
+        await pool.query(
+            `
+            INSERT INTO messages
+                (session_id, sender_role, content)
+            VALUES
+                ($1, $2, $3)
+            `,
+            [id, 'user', message.trim()]
+        )
 
-        const context = await _searchKb(message)
-        const contextString = JSON.stringify(context)
-        const aiResponse = await _resolveKb(message, contextString)
+        // Query Python RAG service
+        const ragResult = await queryRAG(message.trim(), 5)
 
-        const { error: aiMsgError } = await supabase.from('messages').insert({ session_id: id, sender_role: 'ai', content: aiResponse })
-        if (aiMsgError) throw aiMsgError
+        const aiResponse = ragResult.answer
 
-        res.json({ status: 'success', response: aiResponse })
+        // Store AI response
+        await pool.query(
+            `
+            INSERT INTO messages
+                (session_id, sender_role, content)
+            VALUES
+                ($1, $2, $3)
+            `,
+            [id, 'ai', aiResponse]
+        )
+
+        res.json({
+            status: 'success',
+            response: aiResponse
+        })
+
     } catch (err) {
         console.error('[sendMessage] Error:', err)
-        res.status(500).json({ status: 'error', error: 'Failed to process message' })
+
+        res.status(500).json({
+            status: 'error',
+            error: 'Failed to process message'
+        })
     }
 }
 
 
-module.exports = { getMessages, sendMessage }
+module.exports = {
+    getMessages,
+    sendMessage
+}

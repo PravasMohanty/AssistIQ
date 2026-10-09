@@ -1,50 +1,91 @@
-const { supabase } = require('../config/supabase')
+const { pool } = require('../config/db')
 
 
 const verifySchema = async () => {
-    const tables = ['profiles', 'chat_sessions', 'messages', 'knowledge_base']
+    const tables = [
+        'profiles',
+        'chat_sessions',
+        'messages',
+        'knowledge_base'
+    ]
+
     const results = {}
     let allOk = true
 
     for (const table of tables) {
-        const { error } = await supabase.from(table).select('*').limit(0)
-        if (error) {
-            results[table] = `Error: ${error.message}`
+        try {
+            const result = await pool.query(
+                `
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name = $1
+                ) AS exists
+                `,
+                [table]
+            )
+
+            if (result.rows[0].exists) {
+                results[table] = 'Accessible'
+            } else {
+                results[table] = 'Table not found'
+                allOk = false
+            }
+
+        } catch (err) {
+            results[table] = `Error: ${err.message}`
             allOk = false
-        } else {
-            results[table] = 'Accessible'
         }
     }
 
     return { allOk, results }
 }
 
+
 const testConnection = async (req, res) => {
     try {
         const { allOk, results } = await verifySchema()
 
         res.json({
-            status: allOk ? "success" : "partial_success",
-            message: "Supabase Schema Verification",
+            status: allOk ? 'success' : 'partial_success',
+            message: 'PostgreSQL Schema Verification',
             tables: results
         })
+
     } catch (err) {
-        res.status(500).json({ status: "error", error: err.message })
+        res.status(500).json({
+            status: 'error',
+            error: err.message
+        })
     }
 }
+
 
 const startupCheck = async () => {
     try {
         const { allOk, results } = await verifySchema()
+
         if (allOk) {
-            console.log('Supabase Connection: Successful')
+            console.log('PostgreSQL Connection: Successful')
         } else {
-            console.warn('Supabase Connection: Partial Success (Check tables)')
-            console.log('Table results:', results) // ← add this
+            console.warn(
+                'PostgreSQL Connection: Partial Success (Check tables)'
+            )
+
+            console.log('Table results:', results)
         }
+
     } catch (err) {
-        console.error('Supabase Connection Error:', err.message)
+        console.error(
+            'PostgreSQL Connection Error:',
+            err.message
+        )
     }
 }
 
-module.exports = { testConnection, startupCheck }
+
+module.exports = {
+    testConnection,
+    startupCheck
+}

@@ -1,4 +1,14 @@
-const { supabase } = require('../config/supabase')
+const bcrypt = require('bcrypt')
+const jwt = require('jsonwebtoken')
+const { pool } = require('../config/db')
+
+
+const JWT_SECRET = process.env.JWT_SECRET
+
+if (!JWT_SECRET) {
+    throw new Error('Missing JWT_SECRET in environment variables')
+}
+
 
 // Register
 const register = async (req, res) => {
@@ -6,79 +16,209 @@ const register = async (req, res) => {
         const { email, password, name } = req.body
 
         if (!email || !password) {
-            return res.status(400).json({ error: 'Email and password required' })
+            return res.status(400).json({
+                error: 'Email and password required'
+            })
         }
 
-        const { data, error } = await supabase.auth.signUp({
-            email,
-            password,
-            options: { data: { name: name || '' } }
-        })
+        // Check whether user already exists
+        const existingUser = await pool.query(
+            `
+            SELECT id
+            FROM profiles
+            WHERE email = $1
+            `,
+            [email]
+        )
 
-        if (error) return res.status(400).json({ error: error.message })
+        if (existingUser.rows.length > 0) {
+            return res.status(409).json({
+                error: 'User already exists'
+            })
+        }
+
+        // Hash password
+        const passwordHash = await bcrypt.hash(password, 12)
+
+        // Create user
+        const result = await pool.query(
+            `
+            INSERT INTO profiles
+                (email, password_hash, name, role)
+            VALUES
+                ($1, $2, $3, $4)
+            RETURNING id, email, name, role, created_at
+            `,
+            [
+                email,
+                passwordHash,
+                name || '',
+                'user'
+            ]
+        )
+
+        const user = result.rows[0]
 
         res.status(201).json({
             message: 'User registered successfully',
-            user: data.user
+            user
         })
-    } catch {
-        res.status(500).json({ error: 'Registration failed' })
+
+    } catch (error) {
+        console.error('[register]', error)
+
+        res.status(500).json({
+            error: 'Registration failed'
+        })
     }
 }
+
 
 // Login
 const login = async (req, res) => {
     try {
         const { email, password } = req.body
 
-        const { data, error } = await supabase.auth.signInWithPassword({
-            email,
-            password
-        })
+        if (!email || !password) {
+            return res.status(400).json({
+                error: 'Email and password required'
+            })
+        }
 
-        if (error) return res.status(401).json({ error: error.message })
+        // Find user
+        const result = await pool.query(
+            `
+            SELECT
+                id,
+                email,
+                password_hash,
+                name,
+                role
+            FROM profiles
+            WHERE email = $1
+            `,
+            [email]
+        )
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({
+                error: 'Invalid email or password'
+            })
+        }
+
+        const user = result.rows[0]
+
+        // Verify password
+        const passwordValid = await bcrypt.compare(
+            password,
+            user.password_hash
+        )
+
+        if (!passwordValid) {
+            return res.status(401).json({
+                error: 'Invalid email or password'
+            })
+        }
+
+        // Generate JWT
+        const token = jwt.sign(
+            {
+                id: user.id,
+                email: user.email,
+                role: user.role
+            },
+            JWT_SECRET,
+            {
+                expiresIn: '1h'
+            }
+        )
 
         res.json({
             message: 'Login successful',
-            user: data.user,
-            access_token: data.session?.access_token
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                role: user.role
+            },
+            access_token: token
         })
-    } catch {
-        res.status(500).json({ error: 'Login failed' })
+
+    } catch (error) {
+        console.error('[login]', error)
+
+        res.status(500).json({
+            error: 'Login failed'
+        })
     }
 }
+
 
 // Profile
 const getProfile = async (req, res) => {
     try {
-        // Your authMiddleware already verified the token and attached the user to req.user
-        const user = req.user
+        // authMiddleware verifies the JWT
+        // and attaches the authenticated user to req.user
 
-        // Supabase stores custom roles inside app_metadata
-        const userRole = user.app_metadata?.role || 'user'
+        const userId = req.user.id
 
-        // Return the exact flat structure your frontend requires
-        return res.status(200).json({
-            id: user.id,
-            email: user.email,
-            name: user.user_metadata?.name || 'user',
-            role: userRole // <-- This is what unlocks the admin features in your UI
-        })
+        const result = await pool.query(
+            `
+            SELECT
+                id,
+                email,
+                name,
+                role
+            FROM profiles
+            WHERE id = $1
+            `,
+            [userId]
+        )
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                error: 'User not found'
+            })
+        }
+
+        const user = result.rows[0]
+
+        return res.status(200).json(user)
+
     } catch (error) {
-        console.error('[getProfile] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Failed to fetch profile' })
+        console.error('[getProfile]', error)
+
+        return res.status(500).json({
+            status: 'error',
+            error: 'Failed to fetch profile'
+        })
     }
 }
 
+
+// Logout
 const logout = async (req, res) => {
     try {
-        // Since we are using Supabase client on frontend, 
-        // server-side logout is mostly for cleaning up any server-side traces if any.
-        // We'll just return success to confirm the request reached here.
-        return res.json({ message: "Logout successful" })
+        // JWT is stateless.
+        // The client should delete its stored access token.
+
+        return res.json({
+            message: 'Logout successful'
+        })
+
     } catch (error) {
-        res.status(500).json({ error: "Logout failed" })
+        console.error('[logout]', error)
+
+        res.status(500).json({
+            error: 'Logout failed'
+        })
     }
 }
 
-module.exports = { register, login, getProfile, logout }
+
+module.exports = {
+    register,
+    login,
+    getProfile,
+    logout
+}
