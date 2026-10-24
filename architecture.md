@@ -1,6 +1,6 @@
-# AssistIQ — Final Architecture Map
+# AssistIQ — Architecture
 
-> This document describes the code that is currently in this repository, not an intended future design. It was traced from each executable entry point and import/call chain. Configuration values and credentials are intentionally not reproduced.
+> Canonical architecture and audit document — consolidated on 2026-10-24 from the prior architecture/audit files and rechecked against the current source tree. It describes current code, not an intended future design. Configuration values and credentials are intentionally not reproduced.
 
 ## 1. The application in one view
 
@@ -479,15 +479,12 @@ This table highlights discrepancies so a reader knows what will actually execute
 | `client/.gitignore` | Ignores Vite output, dependencies, editor files, logs, and `.env`. |
 | `client/vite.config.js` | Enables React Vite plugin; no proxy is configured. Hence browser calls need `VITE_API_URL` and Express CORS must allow the browser origin. |
 | `client/eslint.config.js` | Flat ESLint configuration for JS/JSX and React hooks/Fast Refresh. |
-| `client/README.md` | Generic Vite starter documentation, not an AssistIQ architecture source. |
 | `server/package.json` | Server dependencies and nodemon dev command. |
 | `server/package-lock.json` | Locked server dependency tree. |
 | `server/.gitignore` | Ignores `node_modules`. There is no checked-in server `.env`; it is expected locally by the server. |
 | `rag-service/.gitignore` | Ignores Python caches/environments, secrets, logs, and local `data/` documents. |
 | `docker-compose.yml` | Local infrastructure definitions and persistent volumes. |
-| `README.md` | Project setup, user-facing overview, example environments, API overview. Some older sections describe Supabase/pgvector rather than the active Chroma RAG route. |
-| `BACKEND_AUDIT.md` | Existing backend audit artifact. |
-| `FINAL_ARCHITECTURE_AND_IMPLEMENTATION_AUDIT.md` | Existing prior architecture/implementation audit artifact. |
+| `README.md` | User-facing project overview, prerequisites, local setup, configuration, and main usage routes. |
 | `LICENSE` | MIT license text. |
 
 ## 13. End-to-end sequences
@@ -547,7 +544,7 @@ KBUploadPage file input
 These items are intentionally called out because they affect maintenance decisions:
 
 1. `server/utils/vectorUtils.js` and `server/config/supabase.js` implement an older Supabase/pgvector route. The active API and chat route call `ragClient.js` and FastAPI/Chroma instead. Running `server/utils/test.js` requires Supabase credentials; normal server start does not import this chain.
-2. The README contains a long Supabase database setup and claims some Supabase usage. Current message/session/profile code uses PostgreSQL, while knowledge base code uses local files + ChromaDB; neither requires Supabase in the normal runtime path.
+2. Earlier project material described a Supabase/pgvector setup. Current message/session/profile code uses PostgreSQL, while knowledge base code uses local files + ChromaDB; neither requires Supabase in the normal runtime path.
 3. `docker-compose.yml` starts Redis, but no JavaScript or Python source imports/contacts Redis.
 4. Several frontend helpers advertise nonexistent routes, listed in [API contract versus frontend declarations](#10-api-contract-versus-frontend-declarations). The current rendered UI avoids the unsupported session and health/test helpers.
 5. `client/api/index.js`’s `initializeApp()` is never called; the real initialization is `AuthProvider`.
@@ -575,7 +572,7 @@ AssistIQ/
 ├── rag-service/               Python FastAPI RAG microservice
 │   └── app/                   Ingestion, vector store, retrieval, generation
 ├── docker-compose.yml         PostgreSQL / Redis / Chroma containers
-└── FINAL_Architecure.md       This architecture map
+└── architecture.md            This architecture map
 ```
 
 ## 16. The shortest mental model
@@ -590,3 +587,37 @@ React page → client API/socket module → Express route/socket handler
            → FastAPI RAG service → ChromaDB + Ollama
            ← answer back through Express → page state/UI
 ```
+
+## 17. Current implementation notes and recommended priorities
+
+### Audit basis and status
+
+This is a static source-code audit, not proof that Docker, PostgreSQL, FastAPI, ChromaDB, or Ollama were running at the time of review. The active design is now coherent at the code-path level: React uses Express-issued JWTs; Express owns profiles/sessions/messages and delegates RAG work to FastAPI; FastAPI uses Chroma and Ollama. The older audits that described active Supabase Auth, a Node-to-Chroma port collision, and no file ingestion are historical and no longer describe the current code.
+
+The project is suitable for local development after its services and environment are configured. It is not production-ready yet because important access-control, reliability, observability, and automation controls are absent.
+
+### Findings
+
+| Priority | Finding | Evidence / consequence |
+|---|---|---|
+| P0 | Client endpoint mismatch | The checked-in client environment points API and Socket.IO to `:5001`, while Express defaults to `:5180`. A default local startup will call the wrong port unless configuration is aligned. |
+| P0 | Unauthenticated inference and token-issuing test paths | `POST /api/kb/search`, `POST /api/kb/resolve`, and both `/api/test/*-login` routes have no auth or rate limit. Search/resolve can consume local inference resources; test login returns a usable token. Remove or protect test routes outside development and add authentication/rate limits. |
+| P0 | FastAPI ingestion endpoint trusts a caller-provided path | `POST /ingest` accepts `file_path` and may read any path that exists on the host. Node sends a safe `data/<filename>` path, but the FastAPI endpoint itself has no authentication or containment enforcement. Bind it to a private network and reject paths outside `rag-service/data`. |
+| P1 | Loose Socket.IO origin policy | Express CORS permits only `http://localhost:5173`, but Socket.IO uses `origin: '*'`. Configure an explicit allow-list for both transports. |
+| P1 | No rate limits, input-size limits, or request validation schema | Login, message, KB, and generation endpoints rely on ad hoc checks. Unbounded or repeated requests can exhaust the local LLM or storage. |
+| P1 | Incomplete failure atomicity | HTTP chat writes the user message before RAG. If RAG fails, the request returns 500 and no AI row is written. Upload writes the file before ingestion, so a failed ingest leaves a pending physical file. Make these states explicit or use transactions/jobs. |
+| P1 | RAG lacks relevance gate and citations | Retrieval always provides nearest chunks; no similarity threshold, source IDs, citations, reranking, or answer-quality checks reach the browser. Unsupported answers remain possible despite the prompt. |
+| P1 | Blocking serial ingestion and sync | Each chunk is embedded synchronously and sync re-ingests documents one-by-one in an HTTP request. Large documents can exceed browser/proxy timeouts and tie up workers. |
+| P1 | No automated test suite | `npm test` intentionally fails and the Python/Node test files are manual smoke scripts. Auth, ownership, route contracts, RAG failure cases, and document lifecycle can regress silently. |
+| P2 | Operational gaps | Health reports only Express liveness; logs are console-only; there are no request IDs, metrics, readiness checks, migrations, queue/jobs, or production deployment configuration. |
+| P2 | Maintenance drift | Redis is unused; legacy Supabase utilities remain; some client helpers name nonexistent endpoints; server `main` points to nonexistent `index.js`; no current UI calls `initializeApp()`. |
+| P2 | Filename/document-ID collisions | Upload storage and Chroma document IDs are both based on a sanitized filename stem. Uploading a same-named file overwrites/replaces the existing document rather than creating a versioned record. |
+
+### Recommended order of work
+
+1. Align `client/.env` with the actual Express port, move `ADMIN_SIGNUP_CODE` to `server/.env`, and make the browser origin/socket origin configuration explicit.
+2. Protect or remove `/api/test/*`, authenticate and rate-limit KB query helpers, and restrict FastAPI to internal callers and paths under `rag-service/data`.
+3. Add request schemas, body/message size limits, secure error handling, and integration tests for authentication, roles, ownership, endpoint contracts, and socket status.
+4. Make document ingestion asynchronous with durable status, retries, unique/versioned document IDs, and cleanup/rollback semantics.
+5. Improve RAG quality with metadata filters, similarity thresholding, source/citation data, bounded context, evaluation fixtures, and optionally reranking.
+6. Add database migration tooling, dependency-aware readiness checks, structured logs/metrics, and a production deployment plan. Remove Redis and legacy Supabase code only after confirming they are not required by any deployment.
