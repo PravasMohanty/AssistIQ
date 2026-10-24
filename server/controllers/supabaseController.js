@@ -6,7 +6,6 @@ const verifySchema = async () => {
         'profiles',
         'chat_sessions',
         'messages',
-        'knowledge_base'
     ]
 
     const results = {}

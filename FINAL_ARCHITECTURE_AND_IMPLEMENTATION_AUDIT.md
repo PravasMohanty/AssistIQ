@@ -4,6 +4,8 @@
 **Project:** AssistIQ (AI-Powered Customer Support Application)  
 **Audit Scope:** Full repository source code inspection across React Frontend, Node.js/Express Backend, Python FastAPI RAG Service, Docker Containers (PostgreSQL, ChromaDB, Redis), Database Schemas, Authentication Flows, and Legacy Supabase Footprint.
 
+> **Update (2026-10-09):** This remains a historical architecture snapshot. Account authentication has since moved to PostgreSQL + Express JWT; Supabase Auth calls were removed from active application code. Server-side Supabase data integrations remain for legacy KB/realtime features.
+
 ---
 
 # 1. EXECUTIVE SUMMARY

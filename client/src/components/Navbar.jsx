@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../contexts/useAuth'
 import { Bot, MessageSquare, Shield, LogOut, Sparkles, Database } from 'lucide-react'
 import './Navbar.css'
 

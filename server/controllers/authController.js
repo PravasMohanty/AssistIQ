@@ -1,9 +1,16 @@
 const bcrypt = require('bcrypt')
+const { timingSafeEqual } = require('crypto')
 const jwt = require('jsonwebtoken')
 const { pool } = require('../config/db')
 
 
 const JWT_SECRET = process.env.JWT_SECRET
+
+const normalizeEmail = (email) => (
+    typeof email === 'string' ? email.trim().toLowerCase() : ''
+)
+
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 
 if (!JWT_SECRET) {
     throw new Error('Missing JWT_SECRET in environment variables')
@@ -13,12 +20,32 @@ if (!JWT_SECRET) {
 // Register
 const register = async (req, res) => {
     try {
-        const { email, password, name } = req.body
+        const { password, name, adminCode } = req.body || {}
+        const email = normalizeEmail(req.body?.email)
 
-        if (!email || !password) {
+        if (!isValidEmail(email) || typeof password !== 'string' || !password) {
             return res.status(400).json({
-                error: 'Email and password required'
+                error: 'A valid email and password are required'
             })
+        }
+
+        let role = 'user'
+        if (typeof adminCode === 'string' && adminCode.trim()) {
+            const configuredAdminCode = process.env.ADMIN_SIGNUP_CODE
+            if (!configuredAdminCode) {
+                return res.status(503).json({ error: 'Admin signup is not configured' })
+            }
+
+            const providedCode = Buffer.from(adminCode.trim())
+            const expectedCode = Buffer.from(configuredAdminCode)
+            if (
+                providedCode.length !== expectedCode.length ||
+                !timingSafeEqual(providedCode, expectedCode)
+            ) {
+                return res.status(403).json({ error: 'Invalid admin code' })
+            }
+
+            role = 'admin'
         }
 
         // Check whether user already exists
@@ -53,7 +80,7 @@ const register = async (req, res) => {
                 email,
                 passwordHash,
                 name || '',
-                'user'
+                role
             ]
         )
 
@@ -65,6 +92,10 @@ const register = async (req, res) => {
         })
 
     } catch (error) {
+        if (error.code === '23505') {
+            return res.status(409).json({ error: 'User already exists' })
+        }
+
         console.error('[register]', error)
 
         res.status(500).json({
@@ -77,11 +108,12 @@ const register = async (req, res) => {
 // Login
 const login = async (req, res) => {
     try {
-        const { email, password } = req.body
+        const { password } = req.body || {}
+        const email = normalizeEmail(req.body?.email)
 
-        if (!email || !password) {
+        if (!isValidEmail(email) || typeof password !== 'string' || !password) {
             return res.status(400).json({
-                error: 'Email and password required'
+                error: 'A valid email and password are required'
             })
         }
 

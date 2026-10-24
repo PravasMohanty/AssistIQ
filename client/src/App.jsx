@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useAuth } from './contexts/AuthContext'
+import { useAuth } from './contexts/useAuth'
 import Layout from './components/Layout'
 import ProtectedRoute from './components/ProtectedRoute'
 import AdminRoute from './components/AdminRoute'
@@ -17,7 +17,7 @@ function App() {
   return (
     <Routes>
       {/* Public route */}
-      <Route path="/auth" element={user ? <Navigate to="/chat" replace /> : <AuthPage />} />
+      <Route path="/auth" element={user ? <Navigate to={user.role === 'admin' ? '/admin' : '/chat'} replace /> : <AuthPage />} />
 
       {/* Protected routes with navbar layout */}
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
@@ -27,7 +27,7 @@ function App() {
       </Route>
 
       {/* Default redirect */}
-      <Route path="*" element={<Navigate to={user ? '/chat' : '/auth'} replace />} />
+      <Route path="*" element={<Navigate to={user ? (user.role === 'admin' ? '/admin' : '/chat') : '/auth'} replace />} />
     </Routes>
   )
 }

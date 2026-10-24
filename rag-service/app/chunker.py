@@ -22,28 +22,35 @@ def chunk_text(text: str, size: int = 500, overlap: int = 100):
     return chunks
 
 
-def split_sections(text: str):
+def split_sections(text: str, default_title: str = "General"):
     sections = []
 
-    # A section is assumed to look like:
-    # "Section Name:"
-    pattern = r"(^[A-Za-z][A-Za-z0-9 /&-]*:)(.*?)(?=^[A-Za-z][A-Za-z0-9 /&-]*:|\Z)"
+    # Match markdown headers (# Header, ## Header) or colon headers (Header:)
+    pattern = r"(^(?:#{1,6}\s+.*|[A-Za-z][A-Za-z0-9 /&-]*:))(.*?)(?=^(?:#{1,6}\s+.*|[A-Za-z][A-Za-z0-9 /&-]*:)|\Z)"
 
-    matches = re.finditer(
+    matches = list(re.finditer(
         pattern,
         text,
         flags=re.MULTILINE | re.DOTALL
-    )
+    ))
 
-    for match in matches:
-        title = match.group(1).strip()
-        content = match.group(2).strip()
+    if matches:
+        for match in matches:
+            title = match.group(1).strip().lstrip('#').strip().rstrip(':').strip()
+            content = match.group(2).strip()
 
-        if content:
-            sections.append({
-                "title": title,
-                "content": content
-            })
+            if content:
+                sections.append({
+                    "title": title or default_title,
+                    "content": content
+                })
+
+    # Robust fallback: if no headings matched, treat entire text as a section
+    if not sections and text.strip():
+        sections.append({
+            "title": default_title,
+            "content": text.strip()
+        })
 
     return sections
 

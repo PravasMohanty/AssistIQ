@@ -1,3 +1,5 @@
+> **Update (2026-10-09):** This is a historical audit snapshot. Active account authentication now uses PostgreSQL, Express, and JWT; Supabase Auth calls were removed from the frontend, diagnostic routes, and Socket.IO handshake. Supabase remains for existing non-auth data integrations.
+
 # 1. Executive Summary
 
 This is a small Node.js/Express API with Supabase-backed authentication and database access, Socket.IO chat, and a text-entry knowledge base that calls a locally hosted Ollama instance for embeddings and generation.

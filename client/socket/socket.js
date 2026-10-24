@@ -1,22 +1,21 @@
 // src/socket/socket.js
 import { io } from 'socket.io-client'
-import { getToken } from '../config/supabase'
+import { getToken } from '../api/token'
 
 let socket = null
 
-// Connect to Socket.io with Supabase token
 export const connectSocket = async () => {
     if (socket?.connected) {
         return socket
     }
 
-    const token = await getToken()
+    const token = getToken()
 
     if (!token) {
         throw new Error('No authentication token available')
     }
 
-    socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5180', {
+    socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001', {
         auth: {
             token
         },

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../contexts/useAuth'
 import { sessionAPI } from '../../api/session'
 import { chatAPI } from '../../api/chat'
 import { getSocket, onMessageReceived, offMessageReceived } from '../../socket/socket'
@@ -19,6 +19,7 @@ const ChatPage = () => {
     const [inputMessage, setInputMessage] = useState('')
     const [sending, setSending] = useState(false)
     const [aiTyping, setAiTyping] = useState(false)
+    const [aiSlow, setAiSlow] = useState(false)
     const [socketConnected, setSocketConnected] = useState(false)
     const [connectionError, setConnectionError] = useState(null)
     const [resolved, setResolved] = useState(false)
@@ -41,6 +42,18 @@ const ChatPage = () => {
         scrollToBottom()
     }, [messages, aiTyping, scrollToBottom])
 
+    // Show slow-response hint after 15s of AI typing
+    useEffect(() => {
+        let slowTimer = null
+        if (aiTyping) {
+            setAiSlow(false)
+            slowTimer = setTimeout(() => setAiSlow(true), 15000)
+        } else {
+            setAiSlow(false)
+        }
+        return () => { if (slowTimer) clearTimeout(slowTimer) }
+    }, [aiTyping])
+
     // Socket listener — retry until socket is available
     useEffect(() => {
         let retryTimer = null
@@ -53,11 +66,11 @@ const ChatPage = () => {
             setAiTyping(false)
             setSending(false)
             setMessages(prev => [...prev, {
-                id: data.id,
-                session_id: data.chatId,
-                sender_role: 'ai',
+                id: data.id || ('ai-' + Date.now()),
+                session_id: data.chatId || data.session_id,
+                sender_role: data.sender_role || data.role || 'ai',
                 content: data.content,
-                created_at: data.created_at
+                created_at: data.created_at || new Date().toISOString()
             }])
         }
 
@@ -164,7 +177,7 @@ const ChatPage = () => {
         setSending(true)
         setAiTyping(true)
 
-        // Optimistic add
+        // Optimistic add user message
         const tempMsg = {
             id: 'temp-' + Date.now(),
             session_id: session.id,
@@ -190,15 +203,15 @@ const ChatPage = () => {
         }
 
         if (!useSocket) {
-            // HTTP fallback
+            // HTTP fallback — AI generation can take 30-120s via Ollama
             try {
-                console.log('📡 Sending via HTTP...')
+                console.log('📡 Sending via HTTP (AI may take 30-90s to respond)...')
                 const res = await chatAPI.sendMessage(session.id, msg)
                 setAiTyping(false)
                 setSending(false)
 
                 // Server returns { status, response: aiResponse }
-                const aiContent = res.response || res.data?.content
+                const aiContent = res.response || res.data?.response || res.data?.content
                 if (aiContent) {
                     console.log('✅ Received AI response via HTTP')
                     setMessages(prev => [...prev, {
@@ -209,19 +222,28 @@ const ChatPage = () => {
                         created_at: new Date().toISOString()
                     }])
                 } else {
-                    console.warn('⚠️ No AI response content received')
+                    console.warn('⚠️ No AI response content in:', res)
+                    setMessages(prev => [...prev, {
+                        id: 'ai-' + Date.now(),
+                        session_id: session.id,
+                        sender_role: 'ai',
+                        content: 'I received your message but could not generate a response. Please try again.',
+                        created_at: new Date().toISOString()
+                    }])
                 }
             } catch (err) {
                 console.error('❌ HTTP send failed:', err)
                 setAiTyping(false)
                 setSending(false)
 
-                // Show error to user
+                const isTimeout = err.code === 'ECONNABORTED' || err.message?.includes('timeout')
                 setMessages(prev => [...prev, {
                     id: 'error-' + Date.now(),
                     session_id: session.id,
                     sender_role: 'ai',
-                    content: `❌ Failed to send message: ${err.message}. Please try again.`,
+                    content: isTimeout
+                        ? '⏳ The AI is taking longer than expected. Please try sending your message again.'
+                        : `❌ Failed to get a response: ${err.response?.data?.error || err.message}. Please try again.`,
                     created_at: new Date().toISOString()
                 }])
             }
@@ -396,6 +418,11 @@ const ChatPage = () => {
                                     <div className="message-bubble typing-indicator">
                                         <span /><span /><span />
                                     </div>
+                                    {aiSlow && (
+                                        <span className="message-time" style={{ color: '#f59e0b', marginTop: '4px' }}>
+                                            ⏳ AI is processing your query, please wait...
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                         )}

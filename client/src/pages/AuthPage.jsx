@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useAuth } from '../contexts/useAuth'
 import { Bot, Mail, Lock, User, ArrowRight, Sparkles } from 'lucide-react'
 import './AuthPage.css'
 
@@ -9,6 +9,7 @@ const AuthPage = () => {
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
     const [name, setName] = useState('')
+    const [adminCode, setAdminCode] = useState('')
     const [error, setError] = useState('')
     const [success, setSuccess] = useState('')
     const [submitting, setSubmitting] = useState(false)
@@ -24,16 +25,17 @@ const AuthPage = () => {
 
         try {
             if (isLogin) {
-                await login(email, password)
-                navigate('/chat', { replace: true })
+                const session = await login(email, password)
+                navigate(session.user.role === 'admin' ? '/admin' : '/chat', { replace: true })
             } else {
-                await register(email, password, name)
+                await register(email, password, name, adminCode)
                 setSuccess('Account created! You can now sign in.')
                 setIsLogin(true)
                 setPassword('')
+                setAdminCode('')
             }
         } catch (err) {
-            setError(err.message || 'Something went wrong')
+            setError(err.response?.data?.error || err.message || 'Something went wrong')
         } finally {
             setSubmitting(false)
         }
@@ -43,6 +45,7 @@ const AuthPage = () => {
         setIsLogin(!isLogin)
         setError('')
         setSuccess('')
+        setAdminCode('')
     }
 
     return (
@@ -98,6 +101,24 @@ const AuthPage = () => {
                                         value={name}
                                         onChange={(e) => setName(e.target.value)}
                                         required={!isLogin}
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {!isLogin && (
+                            <div className="input-group">
+                                <label htmlFor="auth-admin-code">Admin Code (optional)</label>
+                                <div className="auth-input-wrapper">
+                                    <Lock size={18} />
+                                    <input
+                                        id="auth-admin-code"
+                                        className="input"
+                                        type="password"
+                                        placeholder="Enter admin code"
+                                        value={adminCode}
+                                        onChange={(e) => setAdminCode(e.target.value)}
+                                        autoComplete="off"
                                     />
                                 </div>
                             </div>

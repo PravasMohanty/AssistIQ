@@ -1,141 +1,90 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { supabase } from '../../config/supabase'
+import { useState, useEffect, useCallback } from 'react'
 import { authAPI } from '../../api/auth'
 import { connectSocket, disconnectSocket } from '../../socket/socket'
-
-const AuthContext = createContext(null)
-
-export const useAuth = () => {
-    const context = useContext(AuthContext)
-    if (!context) throw new Error('useAuth must be used within AuthProvider')
-    return context
-}
+import { AUTH_UNAUTHORIZED_EVENT, getToken } from '../../api/token'
+import { AuthContext } from './contextInstance'
 
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null)
     const [profile, setProfile] = useState(null)
     const [loading, setLoading] = useState(true)
 
-    // Fetch user profile from backend
     const fetchProfile = useCallback(async () => {
-        try {
-            console.log('🔄 Fetching user profile...')
-            const res = await authAPI.getProfile()
-            const profileData = res.profile || res.data || res
-
-            if (!profileData || typeof profileData !== 'object') {
-                throw new Error('Invalid profile data received from server')
-            }
-
-            console.log('✅ Profile loaded:', {
-                email: profileData.email,
-                role: profileData.role,
-                isAdmin: profileData.role === 'admin'
-            })
-
-            setProfile(profileData)
-            return profileData
-        } catch (err) {
-            console.error('❌ Profile fetch failed:', err.message)
-            setProfile(null)
-            return null
+        const profileData = await authAPI.getProfile()
+        if (!profileData || typeof profileData !== 'object' || !profileData.id) {
+            throw new Error('Invalid profile data received from server')
         }
+
+        setUser(profileData)
+        setProfile(profileData)
+        return profileData
     }, [])
 
-    // Initialize auth state using ONLY onAuthStateChange
-    // This avoids Navigator Lock contention that happens when
-    // getSession() and onAuthStateChange() compete for the same lock
     useEffect(() => {
         let mounted = true
 
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (event, session) => {
-                if (!mounted) return
-
-                console.log('🔄 Auth event:', event)
-
-                if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-                    if (session?.user) {
-                        console.log('✅ User session active:', session.user.email)
-                        setUser(session.user)
-
-                        // Use setTimeout to avoid calling Supabase APIs inside the callback
-                        // which could cause additional lock contention
-                        setTimeout(async () => {
-                            if (!mounted) return
-                            const profileData = await fetchProfile()
-
-                            if (profileData) {
-                                try {
-                                    console.log('🔌 Connecting socket...')
-                                    await connectSocket()
-                                    console.log('✅ Socket connected')
-                                } catch (e) {
-                                    console.warn('⚠️ Socket connection failed (non-critical):', e.message)
-                                }
-                            }
-
-                            if (mounted) setLoading(false)
-                        }, 0)
-                    } else {
-                        console.log('ℹ️ No active session')
-                        setLoading(false)
-                    }
-                } else if (event === 'SIGNED_OUT') {
-                    console.log('👋 User signed out')
-                    setUser(null)
-                    setProfile(null)
-                    disconnectSocket()
-                    setLoading(false)
-                } else if (event === 'TOKEN_REFRESHED') {
-                    console.log('🔑 Token refreshed')
-                    // No need to refetch profile, just update user
-                    if (session?.user) setUser(session.user)
-                }
-            }
-        )
-
-        // Safety timeout in case onAuthStateChange never fires
-        const safetyTimer = setTimeout(() => {
-            if (mounted) {
-                console.warn('[AuthContext] Safety timeout - forcing loading to false')
-                setLoading(false)
-            }
-        }, 10000)
-
-        return () => {
-            mounted = false
-            clearTimeout(safetyTimer)
-            subscription?.unsubscribe()
-        }
-    }, [fetchProfile])
-
-    // Login
-    const login = async (email, password) => {
-        const data = await authAPI.login(email, password)
-        return data
-    }
-
-    // Register
-    const register = async (email, password, name) => {
-        const data = await authAPI.register(email, password, name)
-        return data
-    }
-
-    // Logout
-    const logout = async () => {
-        try {
-            console.log('🔄 Logging out...')
+        const handleUnauthorized = () => {
             setUser(null)
             setProfile(null)
             disconnectSocket()
-            await supabase.auth.signOut()
-            console.log('✅ Logged out')
-        } catch (err) {
-            console.error('Logout error:', err)
         }
-        // No window.location.href — let React Router handle the redirect
-        // The SIGNED_OUT event will clear state, and ProtectedRoute will redirect
+
+        window.addEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized)
+
+        const initializeAuth = async () => {
+            try {
+                if (!getToken()) return
+
+                await fetchProfile()
+                if (mounted) {
+                    try {
+                        await connectSocket()
+                    } catch {
+                        // HTTP authentication remains available if the socket is offline.
+                    }
+                }
+            } catch (error) {
+                if (error.response?.status !== 401) {
+                    console.error('Session restoration failed:', error.message)
+                }
+            } finally {
+                if (mounted) setLoading(false)
+            }
+        }
+
+        initializeAuth()
+
+        return () => {
+            mounted = false
+            window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, handleUnauthorized)
+        }
+    }, [fetchProfile])
+
+    const login = async (email, password) => {
+        const data = await authAPI.login(email, password)
+        if (!data.user || typeof data.user !== 'object') {
+            throw new Error('Login response did not include a user profile')
+        }
+
+        setUser(data.user)
+        setProfile(data.user)
+        try {
+            await connectSocket()
+        } catch {
+            // HTTP authentication remains available if the socket is offline.
+        }
+        return data
+    }
+
+    const register = async (email, password, name, adminCode) => {
+        return authAPI.register(email, password, name, adminCode)
+    }
+
+    const logout = async () => {
+        await authAPI.logout()
+        setUser(null)
+        setProfile(null)
+        disconnectSocket()
     }
 
     const isAdmin = profile?.role === 'admin'

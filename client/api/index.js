@@ -1,4 +1,8 @@
 // src/api/index.js
+import { authAPI } from './auth'
+import { healthAPI } from './health'
+import { connectSocket } from '../socket/socket'
+
 export { authAPI } from './auth'
 export { sessionAPI } from './session'
 export { chatAPI } from './chat'
@@ -6,9 +10,6 @@ export { kbAPI } from './kb'
 export { healthAPI } from './health'
 export { testAPI } from './test'
 export { default as api } from './api'
-
-// Supabase exports
-export { supabase, getSession, getToken } from '../config/supabase'
 
 // Socket exports
 export {
@@ -27,18 +28,17 @@ export const initializeApp = async () => {
         const health = await healthAPI.check()
         console.log('✅ API Health:', health)
 
-        // Check authentication
-        const { data: { session } } = await supabase.auth.getSession()
+        const authenticated = await authAPI.isAuthenticated()
 
-        if (session) {
+        if (authenticated) {
             console.log('✅ User authenticated')
-            // Connect socket
+            await authAPI.getProfile()
             await connectSocket()
         } else {
             console.log('⚠️ User not authenticated')
         }
 
-        return { healthy: true, authenticated: !!session }
+        return { healthy: true, authenticated }
     } catch (error) {
         console.error('❌ App initialization failed:', error)
         return { healthy: false, authenticated: false, error }

@@ -1,5 +1,6 @@
-const { supabase } = require('../config/supabase')
-const { _searchKb, _resolveKb } = require('../controllers/kbController')
+const jwt = require('jsonwebtoken')
+const { pool } = require('../config/db')
+const { queryRAG } = require('../utils/ragClient')
 
 const setupSocket = (io) => {
 
@@ -11,20 +12,17 @@ const setupSocket = (io) => {
                 return next(new Error('No token provided'))
             }
 
-            const { data: { user }, error } = await supabase.auth.getUser(token)
-
-            if (error || !user) {
-                return next(new Error('Invalid or expired token'))
-            }
+            const user = jwt.verify(token, process.env.JWT_SECRET)
+            if (!user.id) return next(new Error('Invalid or expired token'))
 
             socket.user = {
                 id: user.id,
                 email: user.email,
-                role: user.app_metadata?.role || 'user'
+                role: user.role || 'user'
             }
             next()
-        } catch (err) {
-            next(new Error('Authentication failed'))
+        } catch {
+            next(new Error('Invalid or expired token'))
         }
     })
 
@@ -40,56 +38,57 @@ const setupSocket = (io) => {
 
                 const trimmedMessage = message.trim()
 
-                // Check session ownership (SECURITY)
-                const { data: session, error: sessionError } = await supabase
-                    .from('chat_sessions')
-                    .select('user_id')
-                    .eq('id', chatId)
-                    .single()
+                // Check session ownership + status
+                const sessionResult = await pool.query(
+                    `SELECT user_id, status FROM chat_sessions WHERE id = $1`,
+                    [chatId]
+                )
 
-                if (sessionError || !session) {
+                if (sessionResult.rows.length === 0) {
                     return socket.emit('error', { error: 'Chat session not found' })
                 }
+
+                const session = sessionResult.rows[0]
 
                 if (session.user_id !== socket.user.id) {
                     return socket.emit('error', { error: 'Unauthorized access to this chat' })
                 }
 
-                // 1. Save user's message (FIX: use session_id and sender_role)
-                const { error: userMsgError } = await supabase
-                    .from('messages')
-                    .insert({ session_id: chatId, sender_role: 'user', content: trimmedMessage })
-
-                if (userMsgError) throw userMsgError
-
-                // 2. Search KB with fallback
-                let context = []
-                try {
-                    context = await _searchKb(trimmedMessage)
-                } catch (err) {
-                    console.error('[KB Search] Error:', err.message)
+                if (session.status !== 'active') {
+                    return socket.emit('error', { error: 'Cannot send messages to a resolved session' })
                 }
 
-                // 3. Generate AI response
-                const contextString = JSON.stringify(context)
-                const aiResponse = await _resolveKb(trimmedMessage, contextString)
+                // 1. Save user message
+                await pool.query(
+                    `INSERT INTO messages (session_id, sender_role, content) VALUES ($1, $2, $3)`,
+                    [chatId, 'user', trimmedMessage]
+                )
 
-                // 4. Save AI response
-                const { data: aiMessage, error: aiMsgError } = await supabase
-                    .from('messages')
-                    .insert({ session_id: chatId, sender_role: 'ai', content: aiResponse })
-                    .select()
-                    .single()
+                // 2. Query RAG service for AI answer
+                let aiResponse = ''
+                try {
+                    const ragResult = await queryRAG(trimmedMessage, 5)
+                    aiResponse = ragResult.answer || 'I was unable to find a relevant answer in the knowledge base.'
+                } catch (err) {
+                    console.error('[Socket][RAG] Error:', err.message)
+                    aiResponse = 'I encountered an error while looking up the knowledge base. Please try again.'
+                }
 
-                if (aiMsgError) throw aiMsgError
+                // 3. Save AI response and return it
+                const msgResult = await pool.query(
+                    `INSERT INTO messages (session_id, sender_role, content) VALUES ($1, $2, $3) RETURNING id, created_at`,
+                    [chatId, 'ai', aiResponse]
+                )
 
-                // 5. Send response
+                const savedMsg = msgResult.rows[0]
+
+                // 4. Emit back to the client
                 socket.emit('receive_message', {
-                    id: aiMessage.id,
+                    id: savedMsg.id,
                     chatId,
-                    role: 'ai',
+                    sender_role: 'ai',
                     content: aiResponse,
-                    created_at: aiMessage.created_at
+                    created_at: savedMsg.created_at
                 })
 
             } catch (err) {

@@ -1,257 +1,221 @@
-const { supabase } = require('../config/supabase')
-const { generateEmbedding, searchByEmbedding, resolveQuery } = require('../utils/vectorUtils')
+const path = require('path')
+const axios = require('axios')
+const { queryRAG } = require('../utils/ragClient')
 
-const VALID_TYPES = ['instruction', 'qa']
+const RAG_SERVICE_URL = process.env.RAG_SERVICE_URL || 'http://127.0.0.1:8001'
 
-const addKbContent = async (req, res) => {
+// Upload file & auto-ingest into ChromaDB
+const uploadKbFile = async (req, res) => {
     try {
-        console.log('[addKbContent] 📥 Request received')
-        const { title, content, type, metadata } = req.body
-
-        if (!title || !content || !type) {
-            console.log('[addKbContent] ❌ Validation failed: missing title/content/type')
-            return res.status(400).json({ status: 'error', error: 'title, content and type are required' })
-        }
-
-        if (!VALID_TYPES.includes(type)) {
-            return res.status(400).json({ status: 'error', error: `type must be one of: ${VALID_TYPES.join(', ')}` })
-        }
-
-        if (metadata !== undefined && metadata !== null && (typeof metadata !== 'object' || Array.isArray(metadata))) {
-            return res.status(400).json({ status: 'error', error: 'metadata must be a JSON object if provided' })
-        }
-
-        console.log('[addKbContent] 🔄 Generating embedding via Ollama...')
-        const embedding = await generateEmbedding(`${title} ${content}`)
-        console.log('[addKbContent] ✅ Embedding generated')
-
-        console.log('[addKbContent] 💾 Inserting into Supabase...')
-        const { data, error } = await supabase
-            .from('knowledge_base')
-            .insert({
-                title,
-                content,
-                type,
-                metadata: metadata || null,
-                embedding,
+        if (!req.file) {
+            return res.status(400).json({
+                status: 'error',
+                error: 'No file was uploaded or file type is not supported (.txt, .md only)'
             })
-            .select()
-            .single()
-
-        if (error) {
-            console.error('[addKbContent] ❌ Supabase insert error:', error)
-            return res.status(500).json({ status: 'error', error: 'Failed to insert knowledge base entry' })
         }
 
-        console.log('[addKbContent] ✅ Entry added successfully:', data?.id)
-        return res.status(201).json({ status: 'success', message: 'Knowledge base entry added', data })
+        const filename = req.file.filename
+        const documentId = path.parse(filename).name
+
+        console.log(`[uploadKbFile] 📥 Received "${filename}", triggering ingestion in rag-service...`)
+
+        const ingestResponse = await axios.post(`${RAG_SERVICE_URL}/ingest`, {
+            file_path: `data/${filename}`,
+            document_id: documentId
+        })
+
+        const chunksIngested = ingestResponse.data.chunks_ingested || 0
+        console.log(`[uploadKbFile] ✅ Ingestion complete: ${chunksIngested} chunks created`)
+
+        return res.status(201).json({
+            status: 'success',
+            message: `"${req.file.originalname}" uploaded and ingested successfully (${chunksIngested} chunks created)`,
+            entry: {
+                id: documentId,
+                title: filename,
+                filename,
+                size_bytes: req.file.size,
+                chunks_count: chunksIngested,
+                status: 'ingested',
+                created_at: new Date().toISOString()
+            }
+        })
     } catch (error) {
-        console.error('[addKbContent] ❌ Unexpected error:', error.message || error)
-        return res.status(500).json({ status: 'error', error: error.message || 'Internal Server Error' })
+        console.error('[uploadKbFile] ❌ Error during ingestion:', error.response?.data || error.message)
+        return res.status(500).json({
+            status: 'error',
+            error: error.response?.data?.detail || error.message || 'Failed to ingest file into RAG service'
+        })
     }
 }
 
+// Get all uploaded documents and ingestion stats
 const getAllKbEntries = async (req, res) => {
     try {
-        const { data, error } = await supabase
-            .from('knowledge_base')
-            .select('id, title, content, type, metadata, created_at')
-            .order('created_at', { ascending: false })
+        const response = await axios.get(`${RAG_SERVICE_URL}/documents`, { timeout: 10000 })
+        const docs = response.data?.documents || []
 
-        if (error) {
-            console.error('[getAllKbEntries] Supabase error:', error)
-            return res.status(500).json({ status: 'error', error: 'Failed to fetch knowledge base entries' })
-        }
+        // Map to format suitable for frontend display
+        const entries = docs.map(doc => ({
+            id: doc.id,
+            title: doc.filename,
+            filename: doc.filename,
+            extension: doc.extension,
+            size_bytes: doc.size_bytes,
+            created_at: doc.modified_at,
+            chunks_count: doc.chunks_count,
+            status: doc.status,
+            type: doc.extension === '.md' ? 'markdown' : 'text'
+        }))
 
-        return res.status(200).json({ status: 'success', entries: data || [] })
+        return res.status(200).json({
+            status: 'success',
+            count: entries.length,
+            entries
+        })
     } catch (error) {
-        console.error('[getAllKbEntries] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+        console.warn('[getAllKbEntries] Warning: RAG service unreachable or returned error:', error.message)
+        return res.status(200).json({
+            status: 'success',
+            entries: [],
+            warning: 'RAG service is currently offline. Start the rag-service on port 8001.'
+        })
     }
 }
 
-const updateKbEntry = async (req, res) => {
-    try {
-        const { id } = req.params
-        const { title, content, type, metadata } = req.body
-
-        if (!id) {
-            return res.status(400).json({ status: 'error', error: 'Entry id is required' })
-        }
-
-        if (type && !VALID_TYPES.includes(type)) {
-            return res.status(400).json({ status: 'error', error: `type must be one of: ${VALID_TYPES.join(', ')}` })
-        }
-
-        // Build update payload
-        const updatePayload = {}
-        if (title !== undefined) updatePayload.title = title
-        if (content !== undefined) updatePayload.content = content
-        if (type !== undefined) updatePayload.type = type
-        if (metadata !== undefined) updatePayload.metadata = metadata
-
-        // Re-generate embedding if title or content changed
-        if (title || content) {
-            // Fetch current entry to combine with partial update
-            const { data: current } = await supabase
-                .from('knowledge_base')
-                .select('title, content')
-                .eq('id', id)
-                .single()
-
-            const newTitle = title || current?.title || ''
-            const newContent = content || current?.content || ''
-            updatePayload.embedding = await generateEmbedding(`${newTitle} ${newContent}`)
-        }
-
-        const { data, error } = await supabase
-            .from('knowledge_base')
-            .update(updatePayload)
-            .eq('id', id)
-            .select()
-            .single()
-
-        if (error) {
-            console.error('[updateKbEntry] Supabase error:', error)
-            return res.status(500).json({ status: 'error', error: 'Failed to update knowledge base entry' })
-        }
-
-        return res.status(200).json({ status: 'success', message: 'Knowledge base entry updated', data })
-    } catch (error) {
-        console.error('[updateKbEntry] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
-    }
-}
-
+// Delete document from data folder and purge its chunks from ChromaDB
 const deleteKbEntry = async (req, res) => {
     try {
         const { id } = req.params
-
         if (!id) {
-            return res.status(400).json({ status: 'error', error: 'Entry id is required' })
+            return res.status(400).json({ status: 'error', error: 'Document id is required' })
         }
 
-        const { error } = await supabase
-            .from('knowledge_base')
-            .delete()
-            .eq('id', id)
+        console.log(`[deleteKbEntry] Deleting document "${id}"...`)
+        const response = await axios.delete(`${RAG_SERVICE_URL}/documents/${encodeURIComponent(id)}`)
 
-        if (error) {
-            console.error('[deleteKbEntry] Supabase error:', error)
-            return res.status(500).json({ status: 'error', error: 'Failed to delete knowledge base entry' })
-        }
-
-        return res.status(200).json({ status: 'success', message: 'Knowledge base entry deleted' })
+        return res.status(200).json({
+            status: 'success',
+            message: `Document "${id}" deleted successfully`,
+            data: response.data
+        })
     } catch (error) {
-        console.error('[deleteKbEntry] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+        console.error('[deleteKbEntry] Error:', error.response?.data || error.message)
+        return res.status(500).json({
+            status: 'error',
+            error: error.response?.data?.detail || error.message || 'Failed to delete document'
+        })
     }
 }
 
-// Internal: core search logic, callable without req/res
-const _searchKb = async (query) => {
-    const queryEmbedding = await generateEmbedding(query.trim())
+// Re-ingest an existing document in rag-service/data
+const reingestKbEntry = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!id) {
+            return res.status(400).json({ status: 'error', error: 'Document id is required' })
+        }
 
-    const [similarResults, { data: instructions, error: instrError }] = await Promise.all([
-        searchByEmbedding(queryEmbedding),
-        supabase
-            .from('knowledge_base')
-            .select('id, title, content, type, metadata')
-            .eq('type', 'instruction'),
-    ])
+        console.log(`[reingestKbEntry] Re-ingesting document "${id}"...`)
+        const response = await axios.post(`${RAG_SERVICE_URL}/documents/${encodeURIComponent(id)}/reingest`)
 
-    if (instrError) {
-        throw new Error(`Failed to fetch instructions: ${instrError.message}`)
-    }
-
-    const similarIds = new Set(similarResults.map((r) => r.id))
-    const uniqueInstructions = (instructions || []).filter((i) => !similarIds.has(i.id))
-
-    return {
-        instructions: uniqueInstructions,
-        relevant: similarResults,
+        return res.status(200).json({
+            status: 'success',
+            message: `Document "${id}" re-ingested successfully (${response.data.chunks_ingested} chunks)`,
+            data: response.data
+        })
+    } catch (error) {
+        console.error('[reingestKbEntry] Error:', error.response?.data || error.message)
+        return res.status(500).json({
+            status: 'error',
+            error: error.response?.data?.detail || error.message || 'Failed to re-ingest document'
+        })
     }
 }
 
+// Sync all knowledge base files
+const syncEmbeddings = async (req, res) => {
+    try {
+        const listRes = await axios.get(`${RAG_SERVICE_URL}/documents`)
+        const docs = listRes.data?.documents || []
+
+        let totalChunks = 0
+        let syncedCount = 0
+
+        for (const doc of docs) {
+            try {
+                const reingestRes = await axios.post(`${RAG_SERVICE_URL}/documents/${encodeURIComponent(doc.id)}/reingest`)
+                totalChunks += reingestRes.data?.chunks_ingested || 0
+                syncedCount++
+            } catch (err) {
+                console.error(`Failed to re-ingest doc ${doc.id}:`, err.message)
+            }
+        }
+
+        return res.status(200).json({
+            status: 'success',
+            message: `Synced ${syncedCount} of ${docs.length} documents (${totalChunks} chunks total)`,
+            synced: syncedCount,
+            totalChunks
+        })
+    } catch (error) {
+        console.error('[syncEmbeddings] Error:', error.message)
+        return res.status(500).json({
+            status: 'error',
+            error: error.message || 'Failed to sync knowledge base'
+        })
+    }
+}
+
+// Search and query helpers
 const searchKbContent = async (req, res) => {
     try {
-        const { query } = req.body
-
-        if (!query || typeof query !== 'string' || !query.trim()) {
-            return res.status(400).json({ status: 'error', error: 'A non-empty query string is required' })
+        const { query, top_k = 5 } = req.body
+        if (!query) {
+            return res.status(400).json({ status: 'error', error: 'query is required' })
         }
 
-        const context = await _searchKb(query)
-
-        return res.status(200).json({ status: 'success', context })
+        const result = await queryRAG(query, top_k)
+        return res.status(200).json({ status: 'success', context: result.context, answer: result.answer })
     } catch (error) {
-        console.error('[searchKbContent] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+        console.error('[searchKbContent] Error:', error.message)
+        return res.status(500).json({ status: 'error', error: error.message || 'Search failed' })
     }
-}
-
-// Internal: core resolve logic, callable without req/res
-const _resolveKb = async (query, content) => {
-    return await resolveQuery(query.trim(), content.trim())
 }
 
 const resolveKbQuery = async (req, res) => {
     try {
-        const { query, content } = req.body
-
-        if (!query || !content) {
-            return res.status(400).json({ status: 'error', error: 'query and content are required' })
+        const { query } = req.body
+        if (!query) {
+            return res.status(400).json({ status: 'error', error: 'query is required' })
         }
 
-        if (typeof query !== 'string' || typeof content !== 'string') {
-            return res.status(400).json({ status: 'error', error: 'query and content must be strings' })
-        }
-
-        const result = await _resolveKb(query, content)
-
-        return res.status(200).json({ status: 'success', result })
+        const result = await queryRAG(query)
+        return res.status(200).json({ status: 'success', result: result.answer })
     } catch (error) {
-        console.error('[resolveKbQuery] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
+        console.error('[resolveKbQuery] Error:', error.message)
+        return res.status(500).json({ status: 'error', error: error.message || 'Resolve failed' })
     }
 }
 
-// Sync embeddings for all KB entries (re-generate embeddings, useful after model changes)
-const syncEmbeddings = async (req, res) => {
-    try {
-        const { data: entries, error: fetchError } = await supabase
-            .from('knowledge_base')
-            .select('id, title, content')
-
-        if (fetchError) {
-            console.error('[syncEmbeddings] Fetch error:', fetchError)
-            return res.status(500).json({ status: 'error', error: 'Failed to fetch entries' })
-        }
-
-        if (!entries || entries.length === 0) {
-            return res.status(200).json({ status: 'success', message: 'No entries to sync', synced: 0 })
-        }
-
-        let synced = 0
-        for (const entry of entries) {
-            try {
-                const embedding = await generateEmbedding(`${entry.title || ''} ${entry.content || ''}`)
-                const { error: updateError } = await supabase
-                    .from('knowledge_base')
-                    .update({ embedding })
-                    .eq('id', entry.id)
-
-                if (!updateError) synced++
-            } catch (err) {
-                console.error(`[syncEmbeddings] Failed for entry ${entry.id}:`, err.message)
-            }
-        }
-
-        return res.status(200).json({ status: 'success', message: `Synced ${synced} of ${entries.length} entries`, synced })
-    } catch (error) {
-        console.error('[syncEmbeddings] Unexpected error:', error)
-        return res.status(500).json({ status: 'error', error: 'Internal Server Error' })
-    }
+const _searchKb = async (query) => {
+    const result = await queryRAG(query, 5)
+    return result.context || []
 }
 
-module.exports = { addKbContent, getAllKbEntries, updateKbEntry, deleteKbEntry, searchKbContent, resolveKbQuery, syncEmbeddings, _searchKb, _resolveKb }
+const _resolveKb = async (query) => {
+    const result = await queryRAG(query)
+    return result.answer || ''
+}
+
+module.exports = {
+    uploadKbFile,
+    getAllKbEntries,
+    deleteKbEntry,
+    reingestKbEntry,
+    syncEmbeddings,
+    searchKbContent,
+    resolveKbQuery,
+    _searchKb,
+    _resolveKb
+}

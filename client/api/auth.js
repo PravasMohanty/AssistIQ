@@ -1,55 +1,51 @@
-// src/api/auth.js
-import { supabase } from '../config/supabase'
 import api from './api'
+import { clearToken, getToken, setToken } from './token'
 
 export const authAPI = {
-    // Register - Direct Supabase
-    register: async (email, password, name) => {
-        const { data, error } = await supabase.auth.signUp({
-            email,
+    register: async (email, password, name, adminCode = '') => {
+        const response = await api.post('/auth/register', {
+            email: email.trim().toLowerCase(),
             password,
-            options: {
-                data: { name }
-            }
+            name,
+            adminCode
+        }, {
+            skipAuth: true
         })
-
-        if (error) throw error
-        return data
+        return response.data
     },
 
-    // Login - Direct Supabase
     login: async (email, password) => {
-        const { data, error } = await supabase.auth.signInWithPassword({
-            email,
+        const response = await api.post('/auth/login', {
+            email: email.trim().toLowerCase(),
             password
+        }, {
+            skipAuth: true,
+            skipUnauthorizedHandling: true
         })
 
-        if (error) throw error
+        const data = response.data
+        if (!data?.access_token || !data.user || typeof data.user !== 'object') {
+            throw new Error('Login response did not include a valid session')
+        }
+
+        setToken(data.access_token)
         return data
     },
 
-    // Get Profile - Your Express endpoint
     getProfile: async () => {
         const response = await api.get('/auth/profile')
         return response.data
     },
 
-    // Logout - Direct Supabase
     logout: async () => {
-        const { error } = await supabase.auth.signOut()
-        if (error) throw error
+        clearToken()
     },
 
-    // Get current user
     getCurrentUser: async () => {
-        const { data: { user }, error } = await supabase.auth.getUser()
-        if (error) throw error
-        return user
+        return getToken() ? authAPI.getProfile() : null
     },
 
-    // Check authentication
     isAuthenticated: async () => {
-        const { data: { session } } = await supabase.auth.getSession()
-        return !!session
+        return Boolean(getToken())
     }
 }

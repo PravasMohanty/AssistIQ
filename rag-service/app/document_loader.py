@@ -9,9 +9,9 @@ def load_text_file(file_path: str) -> str:
             f"Document not found: {file_path}"
         )
 
-    if path.suffix.lower() != ".txt":
+    if path.suffix.lower() not in [".txt", ".md"]:
         raise ValueError(
-            f"Unsupported file type: {path.suffix}"
+            f"Unsupported file type: {path.suffix}. Only .txt and .md are supported."
         )
 
     return path.read_text(encoding="utf-8")

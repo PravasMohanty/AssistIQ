@@ -3,13 +3,15 @@ from app.chunker import split_sections, chunk_document
 from app.chroma_store import ChromaStore
 
 
+from pathlib import Path
+
+
 class Ingestion:
 
     def __init__(self):
         self.store = ChromaStore()
 
-    def ingest(self, file_path: str):
-
+    def ingest(self, file_path: str, document_id: str = None):
         # 1. Load document
         text = load_text_file(file_path)
 
@@ -20,10 +22,14 @@ class Ingestion:
         chunks = chunk_document(sections)
 
         # 4. Store chunks and embeddings in Chroma
-        document_id = "handbook"
-        count = self.store.add_chunks(chunks , document_id)
+        if not document_id:
+            document_id = Path(file_path).stem
 
+        count = self.store.add_chunks(chunks, document_id)
         return count
+
+    def delete(self, document_id: str):
+        return self.store.delete_document(document_id)
 
 
 if __name__ == "__main__":

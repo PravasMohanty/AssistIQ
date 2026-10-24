@@ -1,5 +1,5 @@
-from document_loader import load_text_file
-from chunker import split_sections
+from app.document_loader import load_text_file
+from app.chunker import split_sections
 
 
 if __name__ == "__main__":

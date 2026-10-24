@@ -31,19 +31,20 @@
 - **React Router v7** for client-side routing
 - **Axios** for API requests
 - **Socket.IO Client** for real-time messaging
-- **Supabase JS** for authentication
+- **Express + PostgreSQL + JWT** for authentication
 - **Lucide React** for icons
 - **Vanilla CSS** with custom design system (glassmorphism, CSS variables)
 
 ### Backend
 - **Node.js** with Express 5
 - **Socket.IO** for WebSocket communication
-- **Supabase** for database (PostgreSQL + pgvector) and authentication
+- **PostgreSQL** for profiles, sessions, and HTTP chat persistence
+- **JWT** for API and Socket.IO authentication
+- **Supabase** remains in use for legacy knowledge-base and realtime persistence integrations
 - **Ollama** for local LLM inference (Mistral + nomic-embed-text)
-- **JWT** for token-based auth middleware
 
-### Database (Supabase)
-Four tables power the application:
+### Data Stores
+PostgreSQL stores account and HTTP chat data. Existing Supabase integrations still serve the knowledge base and parts of realtime chat:
 
 | Table | Purpose |
 |---|---|
@@ -84,11 +85,13 @@ ollama pull nomic-embed-text   # Embedding model (~270MB)
 
 > **Note:** Ollama must be running on `http://localhost:11434` before starting the server. The first pull may take a few minutes depending on your internet speed.
 
-### 3. Set Up Supabase
+### 3. Set Up Supabase for Existing Knowledge-Base Features
 
 1. Create a new Supabase project at [supabase.com](https://supabase.com/)
 2. Enable the **pgvector** extension in your database (SQL Editor → `CREATE EXTENSION IF NOT EXISTS vector;`)
 3. Create the required tables:
+
+> The SQL below is legacy setup for Supabase-backed knowledge-base/realtime features and includes Supabase Auth-linked schema objects. Account registration and login use the local PostgreSQL schema in `server/config/schema.sql` and Express-issued JWTs; do not use Supabase Auth for application sign-in.
 
 ```sql
 
@@ -402,16 +405,23 @@ $$;
 
 ```env
 PORT=5180
+JWT_SECRET="generate-a-long-random-backend-only-secret"
+ADMIN_SIGNUP_CODE="set-a-separate-random-admin-signup-code"
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=assistiq
+DB_USER=assistiq
+DB_PASSWORD=assistiq_password
 SUPABASE_PROJECT_URL="https://YOUR_PROJECT.supabase.co"
-ANON_PUBLIC_KEY="your-anon-key"
-SECRET_SERVICE_ROLE_KEY="your-service-role-key"
+SUPABASE_SECRET_KEY="your-server-side-supabase-key"
 ```
+
+Generate `JWT_SECRET` with `node -p "require('crypto').randomBytes(32).toString('hex')"`. Never put it in a `VITE_` variable. The Supabase settings remain server-side for existing non-auth features.
+Set `ADMIN_SIGNUP_CODE` to a separate strong value in `server/.env`; it must never be placed in `client/.env` or exposed through a Vite variable. Supplying the matching code during registration creates an admin account; omitting it creates a regular user.
 
 **Client** (`client/.env`):
 
 ```env
-VITE_SUPABASE_URL="https://YOUR_PROJECT.supabase.co"
-VITE_SUPABASE_ANON_KEY="your-anon-key"
 VITE_API_URL="http://localhost:5180/api"
 VITE_SOCKET_URL="http://localhost:5180"
 ```
@@ -453,7 +463,7 @@ The app will be available at **http://localhost:5173**
 
 | Feature | Description |
 |---|---|
-| **Sign Up / Login** | Secure authentication via Supabase Auth |
+| **Sign Up / Login** | PostgreSQL-backed accounts with bcrypt password hashes and Express-issued JWTs |
 | **Real-Time Chat** | Send messages and receive AI responses in real time via WebSocket |
 | **Session Management** | Active session tracking with the ability to resolve/close tickets |
 | **Resolve Prompt** | After receiving a response, users are prompted: *"Are your queries resolved?"* |
@@ -481,7 +491,7 @@ Accessible at `/admin` for users with the `admin` role.
 AssistIQ/
 ├── client/                     # React frontend (Vite)
 │   ├── api/                    # API service modules (auth, chat, kb, session)
-│   ├── config/                 # Supabase client config
+│   ├── config/                 # App configuration
 │   ├── socket/                 # Socket.IO client setup
 │   ├── src/
 │   │   ├── components/         # Navbar, ProtectedRoute
@@ -529,13 +539,15 @@ User Message
 ### Authentication Flow
 
 ```
-Login → Supabase Auth → JWT Token → API Requests (Bearer Token)
+Login → Express / PostgreSQL → JWT stored in browser localStorage → API and Socket.IO (Bearer token)
                                          │
                               ┌──────────┴──────────┐
                               │                     │
                         authMiddleware         adminMiddleware
                         (all users)            (admin only)
 ```
+
+The browser-accessible token storage supports session restoration after refresh, but a successful cross-site scripting attack could read the token. JWT logout removes the token from this browser; it does not revoke a copied token before its one-hour expiration.
 
 ---
 
